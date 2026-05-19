@@ -37,3 +37,8 @@ outputs/
 wandb/
 *.pt
 *.pth
+
+# Personal Claude Code instructions (not for sharing)
+CLAUDE.local.md
+.claude/
+.claude/settings.local.json
