@@ -16,6 +16,7 @@ except Exception:
     pass
 
 import logging
+import csv
 import json
 import math
 import pprint
@@ -99,6 +100,15 @@ def main(args_eval, resume_preempt=False):
     duration = args_data.get("clip_duration", None)
     num_views_per_segment = args_data.get("num_views_per_segment", 1)
     normalization = args_data.get("normalization", None)
+    corn_pos_weight = None
+    if head_type == "corn":
+        corn_pos_weight = _resolve_corn_pos_weight(
+            args_classifier.get("corn_pos_weight"),
+            train_data_path,
+            num_classes,
+        )
+        if corn_pos_weight is not None:
+            logger.info(f"Using CORN pos_weight: {corn_pos_weight.tolist()}")
 
     # -- OPTIMIZATION
     args_opt = args_exp.get("optimization")
@@ -298,6 +308,7 @@ def main(args_eval, resume_preempt=False):
                 use_bfloat16=use_bfloat16,
                 head_type=head_type,
                 num_classes=num_classes,
+                corn_pos_weight=corn_pos_weight,
             )
             train_acc = train_result["acc"]
 
@@ -314,6 +325,7 @@ def main(args_eval, resume_preempt=False):
             use_bfloat16=use_bfloat16,
             head_type=head_type,
             num_classes=num_classes,
+            corn_pos_weight=corn_pos_weight,
         )
         val_acc = val_result["acc"]
 
@@ -402,13 +414,21 @@ def run_one_epoch(
     use_bfloat16,
     head_type="softmax",
     num_classes=None,
+    corn_pos_weight=None,
 ):
 
     for c in classifiers:
         c.train(mode=training)
 
     if head_type == "corn":
-        criterion = lambda logits, labels: corn_loss(logits, labels, num_levels=num_classes)
+        if corn_pos_weight is not None:
+            corn_pos_weight = corn_pos_weight.to(device)
+        criterion = lambda logits, labels: corn_loss(
+            logits,
+            labels,
+            num_levels=num_classes,
+            pos_weight=corn_pos_weight,
+        )
     else:
         criterion = torch.nn.CrossEntropyLoss()
     top1_meters = [AverageMeter() for _ in classifiers]
@@ -556,6 +576,54 @@ def _init_wandb_logger(wandb_cfg, log_fields, args_eval, folder, eval_tag):
         job_type=wandb_cfg.get("job_type", "video_classification_frozen"),
         config=wandb_cfg.get("config", args_eval),
     )
+
+
+def _resolve_corn_pos_weight(config_value, train_paths, num_classes):
+    if config_value in (None, False):
+        return None
+    if isinstance(config_value, str) and config_value.lower() == "auto":
+        labels = _read_labels_from_csvs(train_paths)
+        if not labels:
+            raise ValueError("corn_pos_weight=auto requires labels in the train CSV.")
+        weights = []
+        label_array = np.array(labels, dtype=np.int64)
+        for threshold in range(num_classes - 1):
+            positives = int(np.sum(label_array > threshold))
+            negatives = int(np.sum(label_array <= threshold))
+            weights.append(float(negatives / positives) if positives > 0 else 1.0)
+        logger.info(
+            "Auto CORN threshold counts: %s",
+            [
+                {
+                    "threshold": threshold,
+                    "positive": int(np.sum(label_array > threshold)),
+                    "negative": int(np.sum(label_array <= threshold)),
+                }
+                for threshold in range(num_classes - 1)
+            ],
+        )
+        return torch.tensor(weights, dtype=torch.float32)
+    if isinstance(config_value, (list, tuple)):
+        weights = [float(value) for value in config_value]
+        if len(weights) != num_classes - 1:
+            raise ValueError(f"Expected {num_classes - 1} CORN pos weights, got {len(weights)}.")
+        return torch.tensor(weights, dtype=torch.float32)
+    raise ValueError("corn_pos_weight must be 'auto', a list of weights, false, or omitted.")
+
+
+def _read_labels_from_csvs(paths):
+    labels = []
+    for path in paths:
+        if not path:
+            continue
+        with open(path, newline="") as handle:
+            reader = csv.DictReader(handle)
+            if reader.fieldnames is None:
+                continue
+            label_col = "label" if "label" in reader.fieldnames else reader.fieldnames[-1]
+            for row in reader:
+                labels.append(int(float(row[label_col])))
+    return labels
 
 
 def _batch_coverage(coverage):

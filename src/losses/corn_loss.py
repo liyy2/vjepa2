@@ -17,7 +17,12 @@ def corn_targets(labels: torch.Tensor, num_levels: int) -> torch.Tensor:
     return (labels.unsqueeze(1) > thresholds.unsqueeze(0)).float()
 
 
-def corn_loss(logits: torch.Tensor, labels: torch.Tensor, num_levels: int = 5) -> torch.Tensor:
+def corn_loss(
+    logits: torch.Tensor,
+    labels: torch.Tensor,
+    num_levels: int = 5,
+    pos_weight: torch.Tensor | None = None,
+) -> torch.Tensor:
     """Binary cross-entropy over the K-1 CORN threshold logits."""
     if logits.ndim != 2 or logits.shape[1] != num_levels - 1:
         raise ValueError(
@@ -27,7 +32,7 @@ def corn_loss(logits: torch.Tensor, labels: torch.Tensor, num_levels: int = 5) -
     if labels.numel() and (int(labels.min()) < 0 or int(labels.max()) >= num_levels):
         raise ValueError(f"Labels must be in [0, {num_levels - 1}].")
     targets = corn_targets(labels, num_levels=num_levels)
-    return F.binary_cross_entropy_with_logits(logits, targets)
+    return F.binary_cross_entropy_with_logits(logits, targets, pos_weight=pos_weight)
 
 
 def corn_probabilities(logits: torch.Tensor) -> torch.Tensor:
