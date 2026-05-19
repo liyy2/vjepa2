@@ -7,6 +7,7 @@ import logging
 import os
 import subprocess
 import sys
+from collections.abc import Mapping
 
 import torch
 
@@ -61,6 +62,63 @@ class CSVLogger(object):
             for i, tv in enumerate(zip(self.types, argv), 1):
                 end = self.delim if i < len(argv) else "\n"
                 print(tv[0] % tv[1], end=end, file=f)
+
+
+class WandBLogger(object):
+    """Small wandb wrapper with the same field-spec/log shape as CSVLogger."""
+
+    def __init__(self, *argv, **kwargs):
+        self.keys = [v[1] for v in argv]
+        self.enabled = kwargs.pop("enabled", True)
+        self.step_key = kwargs.pop("step_key", self.keys[0] if self.keys else None)
+        self._wandb = None
+        self.run = None
+        if not self.enabled:
+            return
+
+        try:
+            import wandb
+        except ImportError as exc:
+            raise RuntimeError("wandb is not installed; disable wandb logging or install wandb.") from exc
+
+        self._wandb = wandb
+        init_kwargs = {k: v for k, v in kwargs.items() if v is not None}
+        self.run = wandb.init(**init_kwargs)
+        if self.step_key is not None:
+            wandb.define_metric(self.step_key)
+            wandb.define_metric("*", step_metric=self.step_key)
+
+    def log(self, *argv):
+        if not self.enabled or self.run is None:
+            return
+        payload = {
+            key: _to_wandb_value(value)
+            for key, value in zip(self.keys, argv)
+        }
+        self._wandb.log(payload)
+
+    def finish(self):
+        if self.enabled and self.run is not None:
+            self._wandb.finish()
+            self.run = None
+
+
+def _to_wandb_value(value):
+    if isinstance(value, torch.Tensor):
+        value = value.detach().cpu()
+        if value.numel() == 1:
+            return value.item()
+        return value.tolist()
+    if hasattr(value, "item") and callable(value.item):
+        try:
+            return value.item()
+        except Exception:
+            pass
+    if isinstance(value, Mapping):
+        return {k: _to_wandb_value(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_to_wandb_value(v) for v in value]
+    return value
 
 
 class AverageMeter(object):

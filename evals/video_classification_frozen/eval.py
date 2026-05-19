@@ -16,22 +16,26 @@ except Exception:
     pass
 
 import logging
+import json
 import math
 import pprint
 
 import numpy as np
 import torch
+import torch.distributed as dist
 import torch.multiprocessing as mp
 import torch.nn.functional as F
 from torch.nn.parallel import DistributedDataParallel
 
 from evals.video_classification_frozen.models import init_module
 from evals.video_classification_frozen.utils import make_transforms
+from src.heads.corn_head import CORNAttentiveClassifier
 from src.datasets.data_manager import init_data
+from src.losses.corn_loss import corn_expected_score, corn_loss
 from src.models.attentive_pooler import AttentiveClassifier
 from src.utils.checkpoint_loader import robust_checkpoint_loader
 from src.utils.distributed import AllReduce, init_distributed
-from src.utils.logging import AverageMeter, CSVLogger
+from src.utils.logging import AverageMeter, CSVLogger, WandBLogger
 
 logging.basicConfig()
 logger = logging.getLogger()
@@ -70,11 +74,17 @@ def main(args_eval, resume_preempt=False):
     args_wrapper = args_pretrain.get("wrapper_kwargs")
 
     args_exp = args_eval.get("experiment")
+    args_wandb = args_eval.get("wandb", {}) or args_exp.get("wandb", {}) or {}
 
     # -- CLASSIFIER
     args_classifier = args_exp.get("classifier")
     num_probe_blocks = args_classifier.get("num_probe_blocks", 1)
     num_heads = args_classifier.get("num_heads", 16)
+    head_type = args_classifier.get("head_type", "softmax")
+    selection_metric = args_classifier.get(
+        "selection_metric",
+        "quadratic_weighted_kappa" if head_type == "corn" else "val_acc",
+    )
 
     # -- DATA
     args_data = args_exp.get("data")
@@ -130,10 +140,37 @@ def main(args_eval, resume_preempt=False):
         os.makedirs(folder, exist_ok=True)
     log_file = os.path.join(folder, f"log_r{rank}.csv")
     latest_path = os.path.join(folder, "latest.pt")
+    best_path = os.path.join(folder, "best.pt")
+    metrics_path = os.path.join(folder, "metrics_latest.json")
 
-    # -- make csv_logger
+    # -- make loggers
+    if head_type == "corn":
+        log_fields = (
+            ("%d", "epoch"),
+            ("%.5f", "train_acc"),
+            ("%.5f", "val_acc"),
+            ("%.5f", "val_spearman"),
+            ("%.5f", "val_qwk"),
+            ("%.5f", "val_mae"),
+            ("%.5f", "train_coverage_rate"),
+            ("%.5f", "train_temporal_span_rate"),
+            ("%.5f", "val_coverage_rate"),
+            ("%.5f", "val_temporal_span_rate"),
+        )
+    else:
+        log_fields = (
+            ("%d", "epoch"),
+            ("%.5f", "train_acc"),
+            ("%.5f", "val_acc"),
+            ("%.5f", "train_coverage_rate"),
+            ("%.5f", "train_temporal_span_rate"),
+            ("%.5f", "val_coverage_rate"),
+            ("%.5f", "val_temporal_span_rate"),
+        )
+    wandb_logger = None
     if rank == 0:
-        csv_logger = CSVLogger(log_file, ("%d", "epoch"), ("%.5f", "train_acc"), ("%.5f", "val_acc"))
+        csv_logger = CSVLogger(log_file, *log_fields)
+        wandb_logger = _init_wandb_logger(args_wandb, log_fields, args_eval, folder, eval_tag)
 
     # Initialize model
 
@@ -149,12 +186,12 @@ def main(args_eval, resume_preempt=False):
     )
     # -- init classifier
     classifiers = [
-        AttentiveClassifier(
+        _build_classifier(
+            head_type=head_type,
             embed_dim=encoder.embed_dim,
             num_heads=num_heads,
             depth=num_probe_blocks,
             num_classes=num_classes,
-            use_activation_checkpointing=True,
         ).to(device)
         for _ in opt_kwargs
     ]
@@ -222,7 +259,7 @@ def main(args_eval, resume_preempt=False):
             [s.step() for s in scheduler]
             [wds.step() for wds in wd_scheduler]
 
-    def save_checkpoint(epoch):
+    def save_checkpoint(epoch, path=latest_path, metrics=None):
         all_classifier_dicts = [c.state_dict() for c in classifiers]
         all_opt_dicts = [o.state_dict() for o in optimizer]
 
@@ -233,18 +270,22 @@ def main(args_eval, resume_preempt=False):
             "epoch": epoch,
             "batch_size": batch_size,
             "world_size": world_size,
+            "metrics": metrics,
+            "selection_metric": selection_metric,
         }
         if rank == 0:
-            torch.save(save_dict, latest_path)
+            torch.save(save_dict, path)
 
     # TRAIN LOOP
+    best_metric = float("-inf")
     for epoch in range(start_epoch, num_epochs):
         logger.info("Epoch %d" % (epoch + 1))
         train_sampler.set_epoch(epoch)
         if val_only:
             train_acc = -1.0
+            train_result = {"acc": train_acc}
         else:
-            train_acc = run_one_epoch(
+            train_result = run_one_epoch(
                 device=device,
                 training=True,
                 encoder=encoder,
@@ -255,9 +296,12 @@ def main(args_eval, resume_preempt=False):
                 wd_scheduler=wd_scheduler,
                 data_loader=train_loader,
                 use_bfloat16=use_bfloat16,
+                head_type=head_type,
+                num_classes=num_classes,
             )
+            train_acc = train_result["acc"]
 
-        val_acc = run_one_epoch(
+        val_result = run_one_epoch(
             device=device,
             training=False,
             encoder=encoder,
@@ -268,16 +312,81 @@ def main(args_eval, resume_preempt=False):
             wd_scheduler=wd_scheduler,
             data_loader=val_loader,
             use_bfloat16=use_bfloat16,
+            head_type=head_type,
+            num_classes=num_classes,
         )
+        val_acc = val_result["acc"]
 
-        logger.info("[%5d] train: %.3f%% test: %.3f%%" % (epoch + 1, train_acc, val_acc))
+        train_coverage_rate = _coverage_metric(train_result, "coverage_rate")
+        train_temporal_span_rate = _coverage_metric(train_result, "temporal_span_rate")
+        val_coverage_rate = _coverage_metric(val_result, "coverage_rate")
+        val_temporal_span_rate = _coverage_metric(val_result, "temporal_span_rate")
+        logger.info(
+            "[%5d] train: %.3f%% test: %.3f%% coverage: train %.1f%%/%.1f%% val %.1f%%/%.1f%%"
+            % (
+                epoch + 1,
+                train_acc,
+                val_acc,
+                100.0 * train_coverage_rate,
+                100.0 * train_temporal_span_rate,
+                100.0 * val_coverage_rate,
+                100.0 * val_temporal_span_rate,
+            )
+        )
         if rank == 0:
-            csv_logger.log(epoch + 1, train_acc, val_acc)
+            if head_type == "corn":
+                log_values = (
+                    epoch + 1,
+                    train_acc,
+                    val_acc,
+                    val_result.get("spearman", float("nan")),
+                    val_result.get("quadratic_weighted_kappa", float("nan")),
+                    val_result.get("mae", float("nan")),
+                    train_coverage_rate,
+                    train_temporal_span_rate,
+                    val_coverage_rate,
+                    val_temporal_span_rate,
+                )
+                csv_logger.log(*log_values)
+                if wandb_logger is not None:
+                    wandb_logger.log(*log_values)
+                with open(metrics_path, "w") as handle:
+                    json.dump(
+                        {
+                            "epoch": epoch + 1,
+                            "train": train_result if not val_only else {"acc": train_acc},
+                            "val": val_result,
+                            "selection_metric": selection_metric,
+                        },
+                        handle,
+                        indent=2,
+                    )
+            else:
+                log_values = (
+                    epoch + 1,
+                    train_acc,
+                    val_acc,
+                    train_coverage_rate,
+                    train_temporal_span_rate,
+                    val_coverage_rate,
+                    val_temporal_span_rate,
+                )
+                csv_logger.log(*log_values)
+                if wandb_logger is not None:
+                    wandb_logger.log(*log_values)
 
         if val_only:
+            if rank == 0 and wandb_logger is not None:
+                wandb_logger.finish()
             return
 
-        save_checkpoint(epoch + 1)
+        save_checkpoint(epoch + 1, path=latest_path, metrics=val_result)
+        metric_value = val_result.get(selection_metric, val_acc)
+        if isinstance(metric_value, (int, float)) and np.isfinite(metric_value) and metric_value > best_metric:
+            best_metric = metric_value
+            save_checkpoint(epoch + 1, path=best_path, metrics=val_result)
+    if rank == 0 and wandb_logger is not None:
+        wandb_logger.finish()
 
 
 def run_one_epoch(
@@ -291,13 +400,22 @@ def run_one_epoch(
     wd_scheduler,
     data_loader,
     use_bfloat16,
+    head_type="softmax",
+    num_classes=None,
 ):
 
     for c in classifiers:
         c.train(mode=training)
 
-    criterion = torch.nn.CrossEntropyLoss()
+    if head_type == "corn":
+        criterion = lambda logits, labels: corn_loss(logits, labels, num_levels=num_classes)
+    else:
+        criterion = torch.nn.CrossEntropyLoss()
     top1_meters = [AverageMeter() for _ in classifiers]
+    coverage_meters = {key: AverageMeter() for key in ("coverage_rate", "temporal_span_rate")}
+    ordinal_scores = [[] for _ in classifiers]
+    ordinal_preds = [[] for _ in classifiers]
+    ordinal_labels = [[] for _ in classifiers]
     for itr, data in enumerate(data_loader):
         if training:
             [s.step() for s in scheduler]
@@ -312,6 +430,10 @@ def run_one_epoch(
             clip_indices = [d.to(device, non_blocking=True) for d in data[2]]
             labels = data[1].to(device)
             batch_size = len(labels)
+            batch_coverage = _batch_coverage(data[3]) if len(data) > 3 else {}
+            for key, meter in coverage_meters.items():
+                if key in batch_coverage:
+                    meter.update(float(AllReduce.apply(torch.tensor(batch_coverage[key], device=device))), batch_size)
 
             # Forward and prediction
             with torch.no_grad():
@@ -324,8 +446,22 @@ def run_one_epoch(
         # Compute loss
         losses = [[criterion(o, labels) for o in coutputs] for coutputs in outputs]
         with torch.no_grad():
-            outputs = [sum([F.softmax(o, dim=1) for o in coutputs]) / len(coutputs) for coutputs in outputs]
-            top1_accs = [100.0 * coutputs.max(dim=1).indices.eq(labels).sum() / batch_size for coutputs in outputs]
+            if head_type == "corn":
+                outputs = [sum([corn_expected_score(o) for o in coutputs]) / len(coutputs) for coutputs in outputs]
+                pred_outputs = [coutputs.round().clamp(0, num_classes - 1).long() for coutputs in outputs]
+                top1_accs = [
+                    100.0 * pred_outputs_i.eq(labels).sum() / batch_size
+                    for pred_outputs_i in pred_outputs
+                ]
+                if not training:
+                    labels_cpu = labels.detach().cpu().long().numpy().tolist()
+                    for classifier_idx, (scores_i, preds_i) in enumerate(zip(outputs, pred_outputs)):
+                        ordinal_scores[classifier_idx].extend(scores_i.detach().cpu().float().numpy().tolist())
+                        ordinal_preds[classifier_idx].extend(preds_i.detach().cpu().long().numpy().tolist())
+                        ordinal_labels[classifier_idx].extend(labels_cpu)
+            else:
+                outputs = [sum([F.softmax(o, dim=1) for o in coutputs]) / len(coutputs) for coutputs in outputs]
+                top1_accs = [100.0 * coutputs.max(dim=1).indices.eq(labels).sum() / batch_size for coutputs in outputs]
             top1_accs = [float(AllReduce.apply(t1a)) for t1a in top1_accs]
             for t1m, t1a in zip(top1_meters, top1_accs):
                 t1m.update(t1a)
@@ -353,7 +489,185 @@ def run_one_epoch(
                 )
             )
 
-    return _agg_top1.max()
+    result = {
+        "acc": float(_agg_top1.max()),
+        "coverage": {key: float(meter.avg) for key, meter in coverage_meters.items() if meter.count > 0},
+    }
+    if head_type == "corn" and not training:
+        per_classifier = []
+        for scores_i, preds_i, labels_i in zip(ordinal_scores, ordinal_preds, ordinal_labels):
+            gathered_scores = _all_gather_python_list(scores_i)
+            gathered_preds = _all_gather_python_list(preds_i)
+            gathered_labels = _all_gather_python_list(labels_i)
+            per_classifier.append(
+                _ordinal_metrics(
+                    labels=np.array(gathered_labels, dtype=np.int64),
+                    predictions=np.array(gathered_preds, dtype=np.int64),
+                    scores=np.array(gathered_scores, dtype=np.float64),
+                    num_classes=num_classes,
+                )
+            )
+        best_idx = _best_metric_index(per_classifier, "quadratic_weighted_kappa")
+        result.update(per_classifier[best_idx])
+        result["best_classifier"] = int(best_idx)
+        result["per_classifier"] = per_classifier
+    return result
+
+
+def _build_classifier(head_type, embed_dim, num_heads, depth, num_classes):
+    if head_type == "corn":
+        return CORNAttentiveClassifier(
+            embed_dim=embed_dim,
+            num_heads=num_heads,
+            depth=depth,
+            num_levels=num_classes,
+            use_activation_checkpointing=True,
+        )
+    return AttentiveClassifier(
+        embed_dim=embed_dim,
+        num_heads=num_heads,
+        depth=depth,
+        num_classes=num_classes,
+        use_activation_checkpointing=True,
+    )
+
+
+def _init_wandb_logger(wandb_cfg, log_fields, args_eval, folder, eval_tag):
+    if not wandb_cfg.get("enabled", False):
+        return None
+    wandb_dir = wandb_cfg.get("dir", folder)
+    os.makedirs(wandb_dir, exist_ok=True)
+    name = wandb_cfg.get("name") or eval_tag or os.path.basename(folder.rstrip(os.sep))
+    project = wandb_cfg.get("project", "vjepa2")
+    logger.info(f"Initializing wandb logger project={project} name={name}")
+    return WandBLogger(
+        *log_fields,
+        enabled=True,
+        project=project,
+        entity=wandb_cfg.get("entity"),
+        name=name,
+        group=wandb_cfg.get("group"),
+        tags=wandb_cfg.get("tags"),
+        notes=wandb_cfg.get("notes"),
+        mode=wandb_cfg.get("mode"),
+        dir=wandb_dir,
+        resume=wandb_cfg.get("resume"),
+        id=wandb_cfg.get("id"),
+        job_type=wandb_cfg.get("job_type", "video_classification_frozen"),
+        config=wandb_cfg.get("config", args_eval),
+    )
+
+
+def _batch_coverage(coverage):
+    if not isinstance(coverage, dict):
+        return {}
+    metrics = {}
+    for key in ("coverage_rate", "temporal_span_rate"):
+        value = coverage.get(key)
+        if value is None:
+            continue
+        if isinstance(value, torch.Tensor):
+            metrics[key] = float(value.float().mean().item())
+        elif isinstance(value, (list, tuple)) and value:
+            metrics[key] = float(np.mean(value))
+        elif isinstance(value, (int, float)):
+            metrics[key] = float(value)
+    return metrics
+
+
+def _coverage_metric(result, key):
+    value = result.get("coverage", {}).get(key, float("nan"))
+    return value if isinstance(value, (int, float)) and np.isfinite(value) else float("nan")
+
+
+def _all_gather_python_list(values):
+    if dist.is_available() and dist.is_initialized() and dist.get_world_size() > 1:
+        gathered = [None for _ in range(dist.get_world_size())]
+        dist.all_gather_object(gathered, list(values))
+        flat = []
+        for item in gathered:
+            flat.extend(item)
+        return flat
+    return list(values)
+
+
+def _best_metric_index(metrics, key):
+    values = [m.get(key, float("nan")) for m in metrics]
+    finite = [v if isinstance(v, (int, float)) and np.isfinite(v) else float("-inf") for v in values]
+    return int(np.argmax(finite))
+
+
+def _ordinal_metrics(labels, predictions, scores, num_classes):
+    if labels.size == 0:
+        return {
+            "n": 0,
+            "accuracy": float("nan"),
+            "spearman": float("nan"),
+            "quadratic_weighted_kappa": float("nan"),
+            "mae": float("nan"),
+            "confusion_matrix": [[0 for _ in range(num_classes)] for _ in range(num_classes)],
+        }
+    predictions = np.clip(predictions, 0, num_classes - 1)
+    labels = np.clip(labels, 0, num_classes - 1)
+    return {
+        "n": int(labels.size),
+        "accuracy": float(100.0 * np.mean(predictions == labels)),
+        "spearman": _spearman(labels.astype(float), scores.astype(float)),
+        "quadratic_weighted_kappa": _quadratic_weighted_kappa(labels, predictions, num_classes),
+        "mae": float(np.mean(np.abs(predictions - labels))),
+        "confusion_matrix": _confusion_matrix(labels, predictions, num_classes).tolist(),
+    }
+
+
+def _rankdata(values):
+    order = np.argsort(values, kind="mergesort")
+    ranks = np.empty(len(values), dtype=np.float64)
+    sorted_values = values[order]
+    start = 0
+    while start < len(values):
+        end = start + 1
+        while end < len(values) and sorted_values[end] == sorted_values[start]:
+            end += 1
+        ranks[order[start:end]] = (start + end - 1) / 2.0 + 1.0
+        start = end
+    return ranks
+
+
+def _spearman(labels, scores):
+    if len(labels) < 2:
+        return float("nan")
+    labels_rank = _rankdata(labels)
+    scores_rank = _rankdata(scores)
+    if np.std(labels_rank) == 0 or np.std(scores_rank) == 0:
+        return float("nan")
+    return float(np.corrcoef(labels_rank, scores_rank)[0, 1])
+
+
+def _quadratic_weighted_kappa(labels, predictions, num_classes):
+    observed = _confusion_matrix(labels, predictions, num_classes).astype(np.float64)
+    total = observed.sum()
+    if total == 0:
+        return float("nan")
+    label_hist = observed.sum(axis=1)
+    pred_hist = observed.sum(axis=0)
+    expected = np.outer(label_hist, pred_hist) / total
+    weights = np.zeros((num_classes, num_classes), dtype=np.float64)
+    denom = float((num_classes - 1) ** 2)
+    for i in range(num_classes):
+        for j in range(num_classes):
+            weights[i, j] = ((i - j) ** 2) / denom
+    observed_weighted = (weights * observed).sum()
+    expected_weighted = (weights * expected).sum()
+    if expected_weighted == 0:
+        return float("nan")
+    return float(1.0 - observed_weighted / expected_weighted)
+
+
+def _confusion_matrix(labels, predictions, num_classes):
+    matrix = np.zeros((num_classes, num_classes), dtype=np.int64)
+    for label, prediction in zip(labels, predictions):
+        matrix[int(label), int(prediction)] += 1
+    return matrix
 
 
 def load_checkpoint(device, r_path, classifiers, opt, scaler, val_only=False):
