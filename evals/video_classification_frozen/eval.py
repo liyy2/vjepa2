@@ -453,9 +453,12 @@ def run_one_epoch(
     else:
         if class_weight is not None:
             class_weight = class_weight.to(device)
-        criterion = torch.nn.CrossEntropyLoss(
-            weight=class_weight,
-            label_smoothing=float(label_smoothing or 0.0),
+        label_smoothing = float(label_smoothing or 0.0)
+        criterion = lambda logits, labels: F.cross_entropy(
+            logits,
+            labels,
+            weight=class_weight.to(dtype=logits.dtype) if class_weight is not None else None,
+            label_smoothing=label_smoothing,
         )
     top1_meters = [AverageMeter() for _ in classifiers]
     coverage_meters = {key: AverageMeter() for key in ("coverage_rate", "temporal_span_rate")}
