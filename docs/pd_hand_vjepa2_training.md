@@ -12,6 +12,7 @@ This runbook documents the one-fold PD hand-task probe run for `item_3_4` on V-J
 - Accuracy-targeted V-JEPA 2.1 dense balanced-softmax no-smoothing Slurm script: `scripts/pd_hand/run_item_3_4_fold0_accuracy_vjepa21_dense_softmax_balanced_nosmooth_wandb_ddp3.sbatch`
 - Accuracy-targeted V-JEPA 2.1 dense softmax no-augmentation Slurm script: `scripts/pd_hand/run_item_3_4_fold0_accuracy_vjepa21_dense_softmax_noaug_wandb_ddp2.sbatch`
 - Accuracy-targeted V-JEPA 2.1 dense softmax no-augmentation/no-crop Slurm script: `scripts/pd_hand/run_item_3_4_fold0_accuracy_vjepa21_dense_softmax_noaug_nocrop_wandb_ddp2.sbatch`
+- Accuracy-targeted V-JEPA 2.1 dense stats-head balanced no-augmentation/no-crop Slurm script: `scripts/pd_hand/run_item_3_4_fold0_accuracy_vjepa21_dense_stats_balanced_noaug_nocrop_wandb_ddp2.sbatch`
 - W&B auth preflight: `scripts/pd_hand/prepare_wandb_auth.sh`
 - Monitor helper: `scripts/pd_hand/monitor_item_3_4_fold0.sh`
 - V-JEPA 2.1 multiclip wrapper: `evals/video_classification_frozen/modelcustom/vit_encoder_multiclip_vjepa21.py`
@@ -23,6 +24,7 @@ This runbook documents the one-fold PD hand-task probe run for `item_3_4` on V-J
 - Accuracy-targeted dense balanced-softmax no-smoothing config: `configs/eval_2_1/pd_hand_item_3_4_fold0_vjepa2_1_vitl384_softmax_balanced_nosmooth_accuracy_dense.yaml`
 - Accuracy-targeted dense softmax no-augmentation config: `configs/eval_2_1/pd_hand_item_3_4_fold0_vjepa2_1_vitl384_softmax_noaug_accuracy_dense.yaml`
 - Accuracy-targeted dense softmax no-augmentation/no-MediaPipe-crop config: `configs/eval_2_1/pd_hand_item_3_4_fold0_vjepa2_1_vitl384_softmax_noaug_nocrop_accuracy_dense.yaml`
+- Accuracy-targeted dense stats-head balanced no-augmentation/no-MediaPipe-crop config: `configs/eval_2_1/pd_hand_item_3_4_fold0_vjepa2_1_vitl384_stats_balanced_noaug_nocrop_accuracy_dense.yaml`
 - Current output root: `/gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/vjepa2_evals/item_3_4/fold_0_ddp3_h100x3`
 - Spearman-targeted output root: `/gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/vjepa2_evals/item_3_4/fold_0_spearman_h100x3`
 - Accuracy-targeted dense output root: `/gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/vjepa2_evals/item_3_4/fold_0_accuracy_vjepa21_dense_h100x3`
@@ -159,6 +161,12 @@ For the same no-augmentation comparison without MediaPipe hand cropping:
 sbatch scripts/pd_hand/run_item_3_4_fold0_accuracy_vjepa21_dense_softmax_noaug_nocrop_wandb_ddp2.sbatch
 ```
 
+For the lower-variance stats-pooling head on the no-augmentation/no-crop input:
+
+```bash
+sbatch scripts/pd_hand/run_item_3_4_fold0_accuracy_vjepa21_dense_stats_balanced_noaug_nocrop_wandb_ddp2.sbatch
+```
+
 ## Monitor
 
 ```bash
@@ -291,6 +299,7 @@ As of May 20, 2026 03:50 EDT, the active target is validation accuracy `>= 70%`.
 - Dense softmax no-augmentation comparison job `28862034` was stopped after the bf16 fix because it had started under the older fp16 autocast path. Replacement job `28862035` is running with 2 H100s because only two H100s were available under the current QOS limit. It keeps the dense 32-frame, stride-1, 12-segment coverage settings but disables training RandAugment and random erasing, and constrains random resized crop to `0.9-1.0` square crops.
 - Future runs after the bf16 fix use true `torch.bfloat16` autocast in the video eval path. Earlier jobs used the existing video-eval behavior, where `use_bfloat16: true` actually selected fp16 autocast.
 - No-MediaPipe-crop jobs `28862036` and `28862037` were stopped because they inherited the base no-augmentation W&B/config values through the shared runner. Dedicated no-crop job `28862038` is running on 2 H100s and confirmed `dataset_kwargs: {hand_crop: false}` plus W&B run id `pd-hand-item-3_4-fold-0-acc-vjepa21-dense-softmax-noaug-nocrop` in its startup log.
+- A stats-pooling probe head is implemented as `head_type: stats`. It pools frozen V-JEPA token features with mean/std/max and uses a small MLP, giving a lower-variance alternative to the single-query attentive probe for this small fold.
 
 ## Learning Criteria
 

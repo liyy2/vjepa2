@@ -31,6 +31,7 @@ from torch.nn.parallel import DistributedDataParallel
 from evals.video_classification_frozen.models import init_module
 from evals.video_classification_frozen.utils import make_transforms
 from src.heads.corn_head import CORNAttentiveClassifier
+from src.heads.stats_head import StatsPoolingClassifier
 from src.datasets.data_manager import init_data
 from src.losses.corn_loss import corn_expected_score, corn_loss
 from src.models.attentive_pooler import AttentiveClassifier
@@ -82,6 +83,7 @@ def main(args_eval, resume_preempt=False):
     num_probe_blocks = args_classifier.get("num_probe_blocks", 1)
     num_heads = args_classifier.get("num_heads", 16)
     head_type = args_classifier.get("head_type", "softmax")
+    head_kwargs = args_classifier.get("head_kwargs", {}) or {}
     selection_metric = args_classifier.get(
         "selection_metric",
         "quadratic_weighted_kappa" if head_type == "corn" else "val_acc",
@@ -170,7 +172,7 @@ def main(args_eval, resume_preempt=False):
     metrics_path = os.path.join(folder, "metrics_latest.json")
 
     # -- make loggers
-    if head_type in ("corn", "softmax"):
+    if head_type in ("corn", "softmax", "stats"):
         log_fields = (
             ("%d", "epoch"),
             ("%.5f", "train_acc"),
@@ -218,6 +220,7 @@ def main(args_eval, resume_preempt=False):
             num_heads=num_heads,
             depth=num_probe_blocks,
             num_classes=num_classes,
+            head_kwargs=head_kwargs,
         ).to(device)
         for _ in opt_kwargs
     ]
@@ -371,7 +374,7 @@ def main(args_eval, resume_preempt=False):
             )
         )
         if rank == 0:
-            if head_type in ("corn", "softmax"):
+            if head_type in ("corn", "softmax", "stats"):
                 log_values = (
                     epoch + 1,
                     train_acc,
@@ -561,7 +564,7 @@ def run_one_epoch(
         "acc": float(_agg_top1.max()),
         "coverage": {key: float(meter.avg) for key, meter in coverage_meters.items() if meter.count > 0},
     }
-    if head_type in ("corn", "softmax") and not training:
+    if head_type in ("corn", "softmax", "stats") and not training:
         per_classifier = []
         for scores_i, preds_i, labels_i in zip(ordinal_scores, ordinal_preds, ordinal_labels):
             gathered_scores = _all_gather_python_list(scores_i)
@@ -585,7 +588,8 @@ def run_one_epoch(
     return result
 
 
-def _build_classifier(head_type, embed_dim, num_heads, depth, num_classes):
+def _build_classifier(head_type, embed_dim, num_heads, depth, num_classes, head_kwargs=None):
+    head_kwargs = head_kwargs or {}
     if head_type == "corn":
         return CORNAttentiveClassifier(
             embed_dim=embed_dim,
@@ -593,6 +597,12 @@ def _build_classifier(head_type, embed_dim, num_heads, depth, num_classes):
             depth=depth,
             num_levels=num_classes,
             use_activation_checkpointing=True,
+        )
+    if head_type == "stats":
+        return StatsPoolingClassifier(
+            embed_dim=embed_dim,
+            num_classes=num_classes,
+            **head_kwargs,
         )
     return AttentiveClassifier(
         embed_dim=embed_dim,
