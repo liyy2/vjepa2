@@ -137,7 +137,7 @@ TAG=pd-hand-item-3_4-fold-0-acc-vjepa21-dense-softmax \
 RUN_ROOT=/gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/vjepa2_evals/item_3_4/fold_0_accuracy_vjepa21_dense_softmax_h100x3/video_classification_frozen/pd-hand-item-3_4-fold-0-acc-vjepa21-dense-softmax \
 JOB_NAME=vjepa_i34_f0_sm21 \
 LOG_PREFIX=acc_vjepa21_dense_softmax_ddp3 \
-scripts/pd_hand/monitor_item_3_4_fold0.sh <job_id>
+scripts/pd_hand/monitor_item_3_4_fold0.sh 28862029
 ```
 
 ## Current Run State
@@ -186,7 +186,7 @@ As of May 20, 2026 01:05 EDT, the active target is validation accuracy `>= 70%`.
 - QWK-selected job `28861909` and Spearman-targeted job `28861962` were stopped because they used the older wrapper and were well below the target.
 - Accuracy-targeted dense job `28861995` reached epoch 1 batch 60, then failed because one clip needed temporal index `603` while `max_frames: 1024` only created 512 temporal-token positions.
 - Fixed accuracy-targeted dense job `28862001` is running on `r818u29n11`. It uses the V-JEPA 2.1-specific wrapper, strict `ema_encoder` checkpoint loading, deterministic validation sampling, temporal position embeddings, `frames_per_clip: 32`, `frame_step: 1`, `num_segments: 12`, `batch_size: 1`, `selection_metric: accuracy`, and `max_frames: 4096`. Its W&B/output tag is `pd-hand-item-3_4-fold-0-acc-vjepa21-dense-pos4096`.
-- The dense softmax comparison keeps the same encoder and sampling but uses `head_type: softmax` and `selection_metric: val_acc` to test whether direct cross-entropy optimizes the requested accuracy target better than CORN.
+- Dense softmax comparison job `28862029` is pending on resources. It keeps the same encoder and sampling but uses `head_type: softmax` and `selection_metric: val_acc` to test whether direct cross-entropy optimizes the requested accuracy target better than CORN.
 
 ## Learning Criteria
 
