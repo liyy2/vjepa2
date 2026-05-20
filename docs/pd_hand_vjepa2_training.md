@@ -247,6 +247,16 @@ LOG_PREFIX=acc_vjepa21_dense_softmax_noaug_nocrop_ddp2 \
 scripts/pd_hand/monitor_item_3_4_fold0.sh 28862038
 ```
 
+For the stats-pooling balanced no-augmentation/no-crop run:
+
+```bash
+TAG=pd-hand-item-3_4-fold-0-acc-vjepa21-dense-stats-balanced-noaug-nocrop \
+RUN_ROOT=/gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/vjepa2_evals/item_3_4/fold_0_accuracy_vjepa21_dense_stats_balanced_noaug_nocrop_h100x2/video_classification_frozen/pd-hand-item-3_4-fold-0-acc-vjepa21-dense-stats-balanced-noaug-nocrop \
+JOB_NAME=vjepa_i34_f0_stbnc21 \
+LOG_PREFIX=acc_vjepa21_dense_stats_balanced_noaug_nocrop_ddp2 \
+scripts/pd_hand/monitor_item_3_4_fold0.sh 28862039
+```
+
 ## Current Run State
 
 Historical note from May 19, 2026 21:19 EDT: job `28861909` was the active weighted CORN online run on `r818u35n11`. It resumed from epoch 3 and started epoch 4 with:
@@ -300,6 +310,7 @@ As of May 20, 2026 03:50 EDT, the active target is validation accuracy `>= 70%`.
 - Future runs after the bf16 fix use true `torch.bfloat16` autocast in the video eval path. Earlier jobs used the existing video-eval behavior, where `use_bfloat16: true` actually selected fp16 autocast.
 - No-MediaPipe-crop jobs `28862036` and `28862037` were stopped because they inherited the base no-augmentation W&B/config values through the shared runner. Dedicated no-crop job `28862038` is running on 2 H100s and confirmed `dataset_kwargs: {hand_crop: false}` plus W&B run id `pd-hand-item-3_4-fold-0-acc-vjepa21-dense-softmax-noaug-nocrop` in its startup log.
 - A stats-pooling probe head is implemented as `head_type: stats`. It pools frozen V-JEPA token features with mean/std/max and uses a small MLP, giving a lower-variance alternative to the single-query attentive probe for this small fold.
+- Stats-pooling balanced no-augmentation/no-crop job `28862039` is queued and currently pending on `QOSMaxGRESPerUser`; it should start when one active comparison releases at least 2 H100s.
 
 ## Learning Criteria
 
