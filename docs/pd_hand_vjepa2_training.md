@@ -236,7 +236,7 @@ TAG=pd-hand-item-3_4-fold-0-acc-vjepa21-dense-softmax-noaug-nocrop \
 RUN_ROOT=/gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/vjepa2_evals/item_3_4/fold_0_accuracy_vjepa21_dense_softmax_noaug_nocrop_h100x2/video_classification_frozen/pd-hand-item-3_4-fold-0-acc-vjepa21-dense-softmax-noaug-nocrop \
 JOB_NAME=vjepa_i34_f0_smnc21 \
 LOG_PREFIX=acc_vjepa21_dense_softmax_noaug_nocrop_ddp2 \
-scripts/pd_hand/monitor_item_3_4_fold0.sh 28862036
+scripts/pd_hand/monitor_item_3_4_fold0.sh 28862038
 ```
 
 ## Current Run State
@@ -290,7 +290,7 @@ As of May 20, 2026 03:50 EDT, the active target is validation accuracy `>= 70%`.
 - Dense balanced-softmax no-smoothing comparison job `28862033` is running. It keeps `class_weight: balanced` but removes label smoothing to test direct raw-accuracy optimization. Fold-0 train has no class-4 examples, so the auto class-4 training weight is `0.0`. Epoch 1 reached validation accuracy `36.36364`, Spearman `0.31613`, QWK `0.14544`, MAE `0.86364`, train coverage `0.93951/0.97561`, and val coverage `0.94125/0.98255`, so it is continuing into epoch 2.
 - Dense softmax no-augmentation comparison job `28862034` was stopped after the bf16 fix because it had started under the older fp16 autocast path. Replacement job `28862035` is running with 2 H100s because only two H100s were available under the current QOS limit. It keeps the dense 32-frame, stride-1, 12-segment coverage settings but disables training RandAugment and random erasing, and constrains random resized crop to `0.9-1.0` square crops.
 - Future runs after the bf16 fix use true `torch.bfloat16` autocast in the video eval path. Earlier jobs used the existing video-eval behavior, where `use_bfloat16: true` actually selected fp16 autocast.
-- No-MediaPipe-crop jobs `28862036` and `28862037` were stopped because they inherited the base no-augmentation W&B/config values through the shared runner. Use the dedicated no-crop Slurm script above for this comparison so the no-crop config is unambiguous.
+- No-MediaPipe-crop jobs `28862036` and `28862037` were stopped because they inherited the base no-augmentation W&B/config values through the shared runner. Dedicated no-crop job `28862038` is running on 2 H100s and confirmed `dataset_kwargs: {hand_crop: false}` plus W&B run id `pd-hand-item-3_4-fold-0-acc-vjepa21-dense-softmax-noaug-nocrop` in its startup log.
 
 ## Learning Criteria
 
