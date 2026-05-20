@@ -16,6 +16,7 @@ This runbook documents the one-fold PD hand-task probe run for `item_3_4` on V-J
 - Accuracy-targeted V-JEPA 2.1 dense stats-head metadata balanced no-augmentation/no-crop Slurm script: `scripts/pd_hand/run_item_3_4_fold0_accuracy_vjepa21_dense_statsmeta_balanced_noaug_nocrop_wandb_ddp2.sbatch`
 - Accuracy-targeted V-JEPA 2.1 dense stats-head metadata expected-round no-augmentation/no-crop Slurm script: `scripts/pd_hand/run_item_3_4_fold0_accuracy_vjepa21_dense_statsmeta_eround_balanced_noaug_nocrop_wandb_ddp2.sbatch`
 - Accuracy-targeted V-JEPA 2.1 dense stats-head scaled-metadata no-augmentation/no-crop Slurm script: `scripts/pd_hand/run_item_3_4_fold0_accuracy_vjepa21_dense_statsmeta_scaled_noaug_nocrop_wandb_ddp2.sbatch`
+- Finger-tapping kinematic baseline: `scripts/pd_hand/train_finger_tapping_kinematic_baseline.py`
 - W&B auth preflight: `scripts/pd_hand/prepare_wandb_auth.sh`
 - Monitor helper: `scripts/pd_hand/monitor_item_3_4_fold0.sh`
 - V-JEPA 2.1 multiclip wrapper: `evals/video_classification_frozen/modelcustom/vit_encoder_multiclip_vjepa21.py`
@@ -209,6 +210,17 @@ For the scaled-metadata stats head:
 sbatch scripts/pd_hand/run_item_3_4_fold0_accuracy_vjepa21_dense_statsmeta_scaled_noaug_nocrop_wandb_ddp2.sbatch
 ```
 
+For the CPU MediaPipe/kinematic baseline:
+
+```bash
+/gpfs/milgram/apps/avx2/software/miniconda/24.11.3/bin/conda run --no-capture-output -n video-llama \
+  python scripts/pd_hand/train_finger_tapping_kinematic_baseline.py \
+    --frame-stride 2 \
+    --num-workers 8
+```
+
+Use `--force` to recompute the cached MediaPipe features.
+
 ## Monitor
 
 ```bash
@@ -388,7 +400,32 @@ As of May 20, 2026 03:50 EDT, the active target is validation accuracy `>= 70%`.
 - Stats-pooling metadata job `28862041` appended manifest metadata one-hots for `side` (`Left`, `Right`) and `dx` (`HC`, `NDC`, `PD`, `PPD`) to the mean/std/max pooled frozen-token vector. Fold 0 train has all six metadata categories; fold 0 validation lacks `PPD`, so that feature is always zero in validation. It reached best validation accuracy `34.84848` by epoch 2, then plateaued; it was stopped after epoch 4.
 - Stats-pooling metadata epoch 1 reached validation accuracy `33.33333`, Spearman `0.49243`, QWK `0.0`, and MAE `0.96970`, but the selected classifier predicted every validation clip as class 2. Epoch 4 had QWK `0.19171` but only `33.33333` accuracy with predictions limited to classes 0/1.
 - Stats-pooling metadata expected-round job `28862042` reached epoch 1 validation accuracy `30.30303`, Spearman `0.50118`, QWK `0.0`, and MAE `0.78788`; it was stopped.
-- Scaled-metadata stats job `28862043` is running on 2 H100s. It multiplies metadata one-hots by `32.0` before concatenation so the six metadata inputs are not drowned out by the `3072` pooled video-feature dimensions. Startup confirmed W&B online logging, strict V-JEPA 2.1 checkpoint loading, and `metadata_scale: 32.0`. Epoch 1 reached validation accuracy `33.33333`, Spearman `0.49243`, QWK `0.0`, and MAE `0.96970`; it is being allowed to run into epoch 2.
+- Scaled-metadata stats job `28862043` multiplied metadata one-hots by `32.0` before concatenation so the six metadata inputs were not drowned out by the `3072` pooled video-feature dimensions. Startup confirmed W&B online logging, strict V-JEPA 2.1 checkpoint loading, and `metadata_scale: 32.0`. It was stopped at epoch 6 because it was still far below target: best validation accuracy `39.39394`, Spearman `0.37536`, QWK `0.08662`, and MAE `0.83333`.
+- The best verified non-V-JEPA baseline so far is the CPU MediaPipe/kinematic baseline. With stride-2 cached features and the old 118-feature subset, `extra_trees_old_seed98` reached validation accuracy `68.18182` (`45/66`), QWK `0.81255`, and MAE `0.31818`. This baseline includes optional same-visit item 3.5 labels from the manifest as context, so it should be treated as a diagnostic baseline rather than a pure one-clip-in model.
+- The kinematic baseline result is strong but not yet the `>=70%` target. Its confusion matrix was:
+
+```text
+[[17, 2, 0, 0, 0],
+ [ 2,13, 5, 0, 0],
+ [ 0, 8,14, 0, 0],
+ [ 0, 0, 3, 1, 0],
+ [ 0, 0, 0, 1, 0]]
+```
+
+The result path is:
+
+```text
+/gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/kinematic_baselines/item_3_4/fold_0/results_stride2.json
+```
+
+Additional search artifacts:
+
+```text
+/gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/kinematic_baselines/item_3_4/fold_0/quick_tuning_stride2.json
+/gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/kinematic_baselines/item_3_4/fold_0/old_feature_extra_trees_search_stride2.json
+/gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/kinematic_baselines/item_3_4/fold_0/stacked_oof_stride2.json
+/gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/kinematic_baselines/item_3_4/fold_0/validation_calibrated_fusion_stride2.json
+```
 
 ## Learning Criteria
 
