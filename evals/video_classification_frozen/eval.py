@@ -100,6 +100,8 @@ def main(args_eval, resume_preempt=False):
     duration = args_data.get("clip_duration", None)
     num_views_per_segment = args_data.get("num_views_per_segment", 1)
     normalization = args_data.get("normalization", None)
+    train_transform_kwargs = args_data.get("train_transform_kwargs", None)
+    val_transform_kwargs = args_data.get("val_transform_kwargs", None)
     corn_pos_weight = None
     softmax_class_weight = None
     label_smoothing = 0.0
@@ -237,6 +239,7 @@ def main(args_eval, resume_preempt=False):
         training=True,
         num_workers=num_workers,
         normalization=normalization,
+        transform_kwargs=train_transform_kwargs,
     )
     val_loader, _ = make_dataloader(
         dataset_type=dataset_type,
@@ -254,6 +257,7 @@ def main(args_eval, resume_preempt=False):
         training=False,
         num_workers=num_workers,
         normalization=normalization,
+        transform_kwargs=val_transform_kwargs,
     )
     ipe = len(train_loader)
     logger.info(f"Dataloader created... iterations per epoch: {ipe}")
@@ -884,13 +888,13 @@ def make_dataloader(
     num_workers=12,
     subset_file=None,
     normalization=None,
+    transform_kwargs=None,
 ):
     if normalization is None:
         normalization = DEFAULT_NORMALIZATION
 
     # Make Video Transforms
-    transform = make_transforms(
-        training=training,
+    transform_args = dict(
         num_views_per_clip=num_views_per_segment,
         random_horizontal_flip=False,
         random_resize_aspect_ratio=(0.75, 4 / 3),
@@ -900,6 +904,14 @@ def make_dataloader(
         motion_shift=False,
         crop_size=img_size,
         normalize=normalization,
+    )
+    transform_args.update(transform_kwargs or {})
+    for tuple_key in ("random_resize_aspect_ratio", "random_resize_scale"):
+        if isinstance(transform_args.get(tuple_key), list):
+            transform_args[tuple_key] = tuple(transform_args[tuple_key])
+    transform = make_transforms(
+        training=training,
+        **transform_args,
     )
 
     data_loader, data_sampler = init_data(

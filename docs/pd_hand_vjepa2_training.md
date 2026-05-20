@@ -10,6 +10,7 @@ This runbook documents the one-fold PD hand-task probe run for `item_3_4` on V-J
 - Accuracy-targeted V-JEPA 2.1 dense softmax Slurm script: `scripts/pd_hand/run_item_3_4_fold0_accuracy_vjepa21_dense_softmax_wandb_ddp3.sbatch`
 - Accuracy-targeted V-JEPA 2.1 dense balanced-softmax Slurm script: `scripts/pd_hand/run_item_3_4_fold0_accuracy_vjepa21_dense_softmax_balanced_wandb_ddp3.sbatch`
 - Accuracy-targeted V-JEPA 2.1 dense balanced-softmax no-smoothing Slurm script: `scripts/pd_hand/run_item_3_4_fold0_accuracy_vjepa21_dense_softmax_balanced_nosmooth_wandb_ddp3.sbatch`
+- Accuracy-targeted V-JEPA 2.1 dense softmax no-augmentation Slurm script: `scripts/pd_hand/run_item_3_4_fold0_accuracy_vjepa21_dense_softmax_noaug_wandb_ddp2.sbatch`
 - W&B auth preflight: `scripts/pd_hand/prepare_wandb_auth.sh`
 - Monitor helper: `scripts/pd_hand/monitor_item_3_4_fold0.sh`
 - V-JEPA 2.1 multiclip wrapper: `evals/video_classification_frozen/modelcustom/vit_encoder_multiclip_vjepa21.py`
@@ -19,12 +20,14 @@ This runbook documents the one-fold PD hand-task probe run for `item_3_4` on V-J
 - Accuracy-targeted dense softmax config: `configs/eval_2_1/pd_hand_item_3_4_fold0_vjepa2_1_vitl384_softmax_accuracy_dense.yaml`
 - Accuracy-targeted dense balanced-softmax config: `configs/eval_2_1/pd_hand_item_3_4_fold0_vjepa2_1_vitl384_softmax_balanced_accuracy_dense.yaml`
 - Accuracy-targeted dense balanced-softmax no-smoothing config: `configs/eval_2_1/pd_hand_item_3_4_fold0_vjepa2_1_vitl384_softmax_balanced_nosmooth_accuracy_dense.yaml`
+- Accuracy-targeted dense softmax no-augmentation config: `configs/eval_2_1/pd_hand_item_3_4_fold0_vjepa2_1_vitl384_softmax_noaug_accuracy_dense.yaml`
 - Current output root: `/gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/vjepa2_evals/item_3_4/fold_0_ddp3_h100x3`
 - Spearman-targeted output root: `/gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/vjepa2_evals/item_3_4/fold_0_spearman_h100x3`
 - Accuracy-targeted dense output root: `/gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/vjepa2_evals/item_3_4/fold_0_accuracy_vjepa21_dense_h100x3`
 - Accuracy-targeted dense softmax output root: `/gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/vjepa2_evals/item_3_4/fold_0_accuracy_vjepa21_dense_softmax_h100x3`
 - Accuracy-targeted dense balanced-softmax output root: `/gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/vjepa2_evals/item_3_4/fold_0_accuracy_vjepa21_dense_softmax_balanced_h100x3`
 - Accuracy-targeted dense balanced-softmax no-smoothing output root: `/gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/vjepa2_evals/item_3_4/fold_0_accuracy_vjepa21_dense_softmax_balanced_nosmooth_h100x3`
+- Accuracy-targeted dense softmax no-augmentation output root: `/gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/vjepa2_evals/item_3_4/fold_0_accuracy_vjepa21_dense_softmax_noaug_h100x2`
 - Current Slurm logs: `/gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/vjepa2_evals/item_3_4/fold_0/run_logs/`
 - Current external split CSVs: `/gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/splits/item_3_4/`
 
@@ -90,6 +93,12 @@ The accuracy-targeted dense balanced-softmax no-smoothing online run id is:
 https://wandb.ai/yl2428/pd-hand-vjepa2/runs/pd-hand-item-3_4-fold-0-acc-vjepa21-dense-softmax-balanced-nosmooth
 ```
 
+The accuracy-targeted dense softmax no-augmentation online run id is:
+
+```text
+https://wandb.ai/yl2428/pd-hand-vjepa2/runs/pd-hand-item-3_4-fold-0-acc-vjepa21-dense-softmax-noaug
+```
+
 ## Submit
 
 From the repo root:
@@ -128,6 +137,12 @@ For the balanced softmax comparison without label smoothing:
 
 ```bash
 sbatch scripts/pd_hand/run_item_3_4_fold0_accuracy_vjepa21_dense_softmax_balanced_nosmooth_wandb_ddp3.sbatch
+```
+
+For the dense softmax no-augmentation comparison, currently sized for two available H100s:
+
+```bash
+sbatch scripts/pd_hand/run_item_3_4_fold0_accuracy_vjepa21_dense_softmax_noaug_wandb_ddp2.sbatch
 ```
 
 ## Monitor
@@ -190,9 +205,19 @@ LOG_PREFIX=acc_vjepa21_dense_softmax_balanced_nosmooth_ddp3 \
 scripts/pd_hand/monitor_item_3_4_fold0.sh 28862033
 ```
 
+For the accuracy-targeted dense softmax no-augmentation run:
+
+```bash
+TAG=pd-hand-item-3_4-fold-0-acc-vjepa21-dense-softmax-noaug \
+RUN_ROOT=/gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/vjepa2_evals/item_3_4/fold_0_accuracy_vjepa21_dense_softmax_noaug_h100x2/video_classification_frozen/pd-hand-item-3_4-fold-0-acc-vjepa21-dense-softmax-noaug \
+JOB_NAME=vjepa_i34_f0_smna21 \
+LOG_PREFIX=acc_vjepa21_dense_softmax_noaug_ddp2 \
+scripts/pd_hand/monitor_item_3_4_fold0.sh 28862034
+```
+
 ## Current Run State
 
-As of May 19, 2026 21:19 EDT, job `28861909` is the active weighted CORN online run on `r818u35n11`. It resumed from epoch 3 and started epoch 4 with:
+Historical note from May 19, 2026 21:19 EDT: job `28861909` was the active weighted CORN online run on `r818u35n11`. It resumed from epoch 3 and started epoch 4 with:
 
 ```text
 corn_pos_weight: [0.4502924, 1.9176470, 12.0526314, 1.0]
@@ -229,16 +254,17 @@ Epoch 8 confusion matrix:
  [0,  0, 0, 1, 0]]
 ```
 
-This is not a finished result, but it is enough to conclude the run is learning some score separation: QWK is positive for four consecutive weighted epochs, QWK improves to `0.19581` by epoch 8, Spearman remains positive, MAE improves, and predictions are no longer a single column. Leave the job running to finish unless later epochs collapse back to QWK `0.0` with a single-column confusion matrix.
+This was useful historical evidence that the weighted CORN objective could learn some score separation: QWK was positive for four consecutive weighted epochs, QWK improved to `0.19581` by epoch 8, Spearman stayed positive, MAE improved, and predictions were no longer a single column.
 
-As of May 20, 2026 03:22 EDT, the active target is validation accuracy `>= 70%`.
+As of May 20, 2026 03:50 EDT, the active target is validation accuracy `>= 70%`.
 
 - QWK-selected job `28861909` and Spearman-targeted job `28861962` were stopped because they used the older wrapper and were well below the target.
 - Accuracy-targeted dense job `28861995` reached epoch 1 batch 60, then failed because one clip needed temporal index `603` while `max_frames: 1024` only created 512 temporal-token positions.
 - Fixed accuracy-targeted dense CORN job `28862001` reached epoch 2 validation accuracy `34.84849` and was stopped to free GPUs for softmax comparisons.
 - Dense softmax comparison job `28862029` reached epoch 1 validation accuracy `30.30303` and was stopped.
-- Dense balanced-softmax comparison job `28862030` failed before the first batch due a weighted-loss autocast dtype mismatch; the loss was fixed and resubmitted as job `28862032`, which is running.
+- Dense balanced-softmax comparison job `28862030` failed before the first batch due a weighted-loss autocast dtype mismatch; the loss was fixed and resubmitted as job `28862032`. Job `28862032` reached epoch 1 validation accuracy `30.30303`, stayed weak in epoch 2 training, and was stopped to free the GPU/QOS budget for the no-augmentation run.
 - Dense balanced-softmax no-smoothing comparison job `28862033` is running. It keeps `class_weight: balanced` but removes label smoothing to test direct raw-accuracy optimization. Fold-0 train has no class-4 examples, so the auto class-4 training weight is `0.0`.
+- Dense softmax no-augmentation comparison job `28862034` is running with 2 H100s because only two H100s were available under the current QOS limit. It keeps the dense 32-frame, stride-1, 12-segment coverage settings but disables training RandAugment and random erasing, and constrains random resized crop to `0.9-1.0` square crops.
 
 ## Learning Criteria
 
