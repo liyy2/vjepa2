@@ -474,7 +474,7 @@ def run_one_epoch(
             [s.step() for s in scheduler]
             [wds.step() for wds in wd_scheduler]
 
-        with torch.cuda.amp.autocast(dtype=torch.float16, enabled=use_bfloat16):
+        with torch.cuda.amp.autocast(dtype=torch.bfloat16, enabled=use_bfloat16):
             # Load data and put on GPU
             clips = [
                 [dij.to(device, non_blocking=True) for dij in di]  # iterate over spatial views of clip

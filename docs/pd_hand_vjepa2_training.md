@@ -265,6 +265,7 @@ As of May 20, 2026 03:50 EDT, the active target is validation accuracy `>= 70%`.
 - Dense balanced-softmax comparison job `28862030` failed before the first batch due a weighted-loss autocast dtype mismatch; the loss was fixed and resubmitted as job `28862032`. Job `28862032` reached epoch 1 validation accuracy `30.30303`, stayed weak in epoch 2 training, and was stopped to free the GPU/QOS budget for the no-augmentation run.
 - Dense balanced-softmax no-smoothing comparison job `28862033` is running. It keeps `class_weight: balanced` but removes label smoothing to test direct raw-accuracy optimization. Fold-0 train has no class-4 examples, so the auto class-4 training weight is `0.0`.
 - Dense softmax no-augmentation comparison job `28862034` is running with 2 H100s because only two H100s were available under the current QOS limit. It keeps the dense 32-frame, stride-1, 12-segment coverage settings but disables training RandAugment and random erasing, and constrains random resized crop to `0.9-1.0` square crops.
+- Future runs after the bf16 fix use true `torch.bfloat16` autocast in the video eval path. Earlier jobs used the existing video-eval behavior, where `use_bfloat16: true` actually selected fp16 autocast.
 
 ## Learning Criteria
 
