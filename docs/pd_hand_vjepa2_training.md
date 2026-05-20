@@ -9,6 +9,7 @@ This runbook documents the one-fold PD hand-task probe run for `item_3_4` on V-J
 - Monitor helper: `scripts/pd_hand/monitor_item_3_4_fold0.sh`
 - Repo-local config: `configs/eval_2_1/pd_hand_item_3_4_fold0_vjepa2_1_vitl_ssv2_corn.yaml`
 - Current output root: `/gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/vjepa2_evals/item_3_4/fold_0_ddp3_h100x3`
+- Current Slurm logs: `/gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/vjepa2_evals/item_3_4/fold_0/run_logs/`
 - Current external split CSVs: `/gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/splits/item_3_4/`
 
 ## W&B
@@ -69,7 +70,7 @@ The monitor prints Slurm state, recent train/validation logs, W&B stderr lines, 
 
 ## Current Run State
 
-As of May 19, 2026, job `28861909` is the active weighted CORN online run. It resumed from epoch 3 and started epoch 4 with:
+As of May 19, 2026 20:38 EDT, job `28861909` is the active weighted CORN online run on `r818u35n11`. It resumed from epoch 3 and started epoch 4 with:
 
 ```text
 corn_pos_weight: [0.4502924, 1.9176470, 12.0526314, 1.0]
@@ -87,7 +88,24 @@ Validation has:
 {0: 19, 1: 20, 2: 22, 3: 4, 4: 1}
 ```
 
-The first three epochs were unweighted and did not show ordinal separation. Epoch 4 was weighted but still had QWK `0.0`; continue monitoring before deciding whether to restart from epoch 0 with weighting.
+The first three epochs were unweighted and did not show ordinal separation. Epoch 4 was weighted but still had QWK `0.0`. Epochs 5-6 are the first weak positive ordinal signal after weighting:
+
+```text
+epoch 5: val_spearman 0.23088, val_qwk 0.08375, val_mae 0.77273
+epoch 6: val_spearman 0.19113, val_qwk 0.07373, val_mae 0.80303
+```
+
+Epoch 6 confusion matrix:
+
+```text
+[[0, 16, 3, 0, 0],
+ [0, 17, 3, 0, 0],
+ [0, 19, 3, 0, 0],
+ [0,  3, 1, 0, 0],
+ [0,  0, 1, 0, 0]]
+```
+
+This is not a finished result, but it is enough to keep the weighted run going: QWK and Spearman are positive for two consecutive weighted epochs, and predictions are no longer a single column.
 
 ## Learning Criteria
 
@@ -125,4 +143,4 @@ Raw coverage is the fraction of individual source frames sampled. Temporal span 
 
 ## If The Weighted Run Still Collapses
 
-If epochs 5-6 still show QWK `0.0` and a single-column confusion matrix, the next clean move is to restart from epoch 0 with `corn_pos_weight: auto` instead of resuming heads that were already biased by the unweighted warmup.
+If later epochs collapse back to QWK `0.0` with a single-column confusion matrix, the next clean move is to restart from epoch 0 with `corn_pos_weight: auto` instead of resuming heads that were already biased by the unweighted warmup.
