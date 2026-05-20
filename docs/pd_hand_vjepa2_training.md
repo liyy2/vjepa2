@@ -11,6 +11,7 @@ This runbook documents the one-fold PD hand-task probe run for `item_3_4` on V-J
 - Accuracy-targeted V-JEPA 2.1 dense balanced-softmax Slurm script: `scripts/pd_hand/run_item_3_4_fold0_accuracy_vjepa21_dense_softmax_balanced_wandb_ddp3.sbatch`
 - Accuracy-targeted V-JEPA 2.1 dense balanced-softmax no-smoothing Slurm script: `scripts/pd_hand/run_item_3_4_fold0_accuracy_vjepa21_dense_softmax_balanced_nosmooth_wandb_ddp3.sbatch`
 - Accuracy-targeted V-JEPA 2.1 dense softmax no-augmentation Slurm script: `scripts/pd_hand/run_item_3_4_fold0_accuracy_vjepa21_dense_softmax_noaug_wandb_ddp2.sbatch`
+- Accuracy-targeted V-JEPA 2.1 dense softmax no-augmentation/no-crop Slurm script: `scripts/pd_hand/run_item_3_4_fold0_accuracy_vjepa21_dense_softmax_noaug_nocrop_wandb_ddp2.sbatch`
 - W&B auth preflight: `scripts/pd_hand/prepare_wandb_auth.sh`
 - Monitor helper: `scripts/pd_hand/monitor_item_3_4_fold0.sh`
 - V-JEPA 2.1 multiclip wrapper: `evals/video_classification_frozen/modelcustom/vit_encoder_multiclip_vjepa21.py`
@@ -100,6 +101,12 @@ The accuracy-targeted dense softmax no-augmentation online run id is:
 https://wandb.ai/yl2428/pd-hand-vjepa2/runs/pd-hand-item-3_4-fold-0-acc-vjepa21-dense-softmax-noaug
 ```
 
+The accuracy-targeted dense softmax no-augmentation/no-crop online run id is:
+
+```text
+https://wandb.ai/yl2428/pd-hand-vjepa2/runs/pd-hand-item-3_4-fold-0-acc-vjepa21-dense-softmax-noaug-nocrop
+```
+
 ## Submit
 
 From the repo root:
@@ -146,15 +153,10 @@ For the dense softmax no-augmentation comparison, currently sized for two availa
 sbatch scripts/pd_hand/run_item_3_4_fold0_accuracy_vjepa21_dense_softmax_noaug_wandb_ddp2.sbatch
 ```
 
-For the same no-augmentation comparison without MediaPipe hand cropping, reuse the DDP2 runner with explicit paths:
+For the same no-augmentation comparison without MediaPipe hand cropping:
 
 ```bash
-CONFIG=/gpfs/milgram/pi/scherzer/yl2428/vjepa2/configs/eval_2_1/pd_hand_item_3_4_fold0_vjepa2_1_vitl384_softmax_noaug_nocrop_accuracy_dense.yaml \
-RUN_FOLDER=/gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/vjepa2_evals/item_3_4/fold_0_accuracy_vjepa21_dense_softmax_noaug_nocrop_h100x2 \
-sbatch --job-name=vjepa_i34_f0_smnc21 \
-  --output=/gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/vjepa2_evals/item_3_4/fold_0/run_logs/acc_vjepa21_dense_softmax_noaug_nocrop_ddp2_%j.out \
-  --error=/gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/vjepa2_evals/item_3_4/fold_0/run_logs/acc_vjepa21_dense_softmax_noaug_nocrop_ddp2_%j.err \
-  scripts/pd_hand/run_item_3_4_fold0_accuracy_vjepa21_dense_softmax_noaug_wandb_ddp2.sbatch
+sbatch scripts/pd_hand/run_item_3_4_fold0_accuracy_vjepa21_dense_softmax_noaug_nocrop_wandb_ddp2.sbatch
 ```
 
 ## Monitor
@@ -227,6 +229,16 @@ LOG_PREFIX=acc_vjepa21_dense_softmax_noaug_ddp2 \
 scripts/pd_hand/monitor_item_3_4_fold0.sh 28862035
 ```
 
+For the accuracy-targeted dense softmax no-augmentation/no-crop run:
+
+```bash
+TAG=pd-hand-item-3_4-fold-0-acc-vjepa21-dense-softmax-noaug-nocrop \
+RUN_ROOT=/gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/vjepa2_evals/item_3_4/fold_0_accuracy_vjepa21_dense_softmax_noaug_nocrop_h100x2/video_classification_frozen/pd-hand-item-3_4-fold-0-acc-vjepa21-dense-softmax-noaug-nocrop \
+JOB_NAME=vjepa_i34_f0_smnc21 \
+LOG_PREFIX=acc_vjepa21_dense_softmax_noaug_nocrop_ddp2 \
+scripts/pd_hand/monitor_item_3_4_fold0.sh 28862036
+```
+
 ## Current Run State
 
 Historical note from May 19, 2026 21:19 EDT: job `28861909` was the active weighted CORN online run on `r818u35n11`. It resumed from epoch 3 and started epoch 4 with:
@@ -278,7 +290,7 @@ As of May 20, 2026 03:50 EDT, the active target is validation accuracy `>= 70%`.
 - Dense balanced-softmax no-smoothing comparison job `28862033` is running. It keeps `class_weight: balanced` but removes label smoothing to test direct raw-accuracy optimization. Fold-0 train has no class-4 examples, so the auto class-4 training weight is `0.0`. Epoch 1 reached validation accuracy `36.36364`, Spearman `0.31613`, QWK `0.14544`, MAE `0.86364`, train coverage `0.93951/0.97561`, and val coverage `0.94125/0.98255`, so it is continuing into epoch 2.
 - Dense softmax no-augmentation comparison job `28862034` was stopped after the bf16 fix because it had started under the older fp16 autocast path. Replacement job `28862035` is running with 2 H100s because only two H100s were available under the current QOS limit. It keeps the dense 32-frame, stride-1, 12-segment coverage settings but disables training RandAugment and random erasing, and constrains random resized crop to `0.9-1.0` square crops.
 - Future runs after the bf16 fix use true `torch.bfloat16` autocast in the video eval path. Earlier jobs used the existing video-eval behavior, where `use_bfloat16: true` actually selected fp16 autocast.
-- A no-MediaPipe-crop config is available because spot checks found some clips where MediaPipe did not detect a hand at the sampled frame, and handedness labels can be camera-convention dependent. This comparison tests whether full-frame V-JEPA features beat the current online crop path.
+- No-MediaPipe-crop jobs `28862036` and `28862037` were stopped because they inherited the base no-augmentation W&B/config values through the shared runner. Use the dedicated no-crop Slurm script above for this comparison so the no-crop config is unambiguous.
 
 ## Learning Criteria
 
