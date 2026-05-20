@@ -47,6 +47,12 @@ The online resumed run id is:
 https://wandb.ai/yl2428/pd-hand-vjepa2/runs/pd-hand-item-3_4-fold-0
 ```
 
+The Spearman-targeted online run id is:
+
+```text
+https://wandb.ai/yl2428/pd-hand-vjepa2/runs/pd-hand-item-3_4-fold-0-spearman
+```
+
 ## Submit
 
 From the repo root:
@@ -84,7 +90,7 @@ TAG=pd-hand-item-3_4-fold-0-spearman \
 RUN_ROOT=/gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/vjepa2_evals/item_3_4/fold_0_spearman_h100x3/video_classification_frozen/pd-hand-item-3_4-fold-0-spearman \
 JOB_NAME=vjepa_i34_f0_sp3 \
 LOG_PREFIX=spearman_ddp3 \
-scripts/pd_hand/monitor_item_3_4_fold0.sh <job_id>
+scripts/pd_hand/monitor_item_3_4_fold0.sh 28861962
 ```
 
 ## Current Run State
@@ -128,7 +134,10 @@ Epoch 8 confusion matrix:
 
 This is not a finished result, but it is enough to conclude the run is learning some score separation: QWK is positive for four consecutive weighted epochs, QWK improves to `0.19581` by epoch 8, Spearman remains positive, MAE improves, and predictions are no longer a single column. Leave the job running to finish unless later epochs collapse back to QWK `0.0` with a single-column confusion matrix.
 
-As of May 19, 2026 21:37 EDT, the stricter active target is validation Spearman `>= 0.6`. The QWK-selected run has not reached that target; epoch 9 Spearman is `0.13228`. A Spearman-targeted follow-up config is available and uses `selection_metric: spearman`, W&B run id `pd-hand-item-3_4-fold-0-spearman`, and `num_epochs: 40`.
+As of May 19, 2026 22:52 EDT, the stricter active target is validation Spearman `>= 0.6`.
+
+- QWK-selected job `28861909` is still running. The latest completed row is epoch 12: validation accuracy `42.42425`, Spearman `0.24286`, QWK `0.32423`, MAE `0.72727`, train coverage `54.8%/97.5%`, validation coverage `53.3%/97.8%`.
+- Spearman-targeted job `28861962` is still running. W&B launched successfully, the run entered epoch 1, and no validation row has completed yet. It uses `selection_metric: spearman`, W&B run id `pd-hand-item-3_4-fold-0-spearman`, and `num_epochs: 40`.
 
 ## Learning Criteria
 
