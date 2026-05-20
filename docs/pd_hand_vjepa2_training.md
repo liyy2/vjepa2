@@ -17,6 +17,8 @@ This runbook documents the one-fold PD hand-task probe run for `item_3_4` on V-J
 - Accuracy-targeted V-JEPA 2.1 dense stats-head metadata expected-round no-augmentation/no-crop Slurm script: `scripts/pd_hand/run_item_3_4_fold0_accuracy_vjepa21_dense_statsmeta_eround_balanced_noaug_nocrop_wandb_ddp2.sbatch`
 - Accuracy-targeted V-JEPA 2.1 dense stats-head scaled-metadata no-augmentation/no-crop Slurm script: `scripts/pd_hand/run_item_3_4_fold0_accuracy_vjepa21_dense_statsmeta_scaled_noaug_nocrop_wandb_ddp2.sbatch`
 - Finger-tapping kinematic baseline: `scripts/pd_hand/train_finger_tapping_kinematic_baseline.py`
+- V-JEPA 2.1 temporal embedding cache: `scripts/pd_hand/cache_vjepa21_temporal_embeddings.py`
+- V-JEPA 2.1 cached temporal encoder sweep: `scripts/pd_hand/train_vjepa21_temporal_encoder.py`
 - W&B auth preflight: `scripts/pd_hand/prepare_wandb_auth.sh`
 - Monitor helper: `scripts/pd_hand/monitor_item_3_4_fold0.sh`
 - V-JEPA 2.1 multiclip wrapper: `evals/video_classification_frozen/modelcustom/vit_encoder_multiclip_vjepa21.py`
@@ -134,6 +136,16 @@ The accuracy-targeted dense scaled-metadata stats-head online run id is:
 https://wandb.ai/yl2428/pd-hand-vjepa2/runs/pd-hand-item-3_4-fold-0-acc-vjepa21-dense-statsmeta-scaled-noaug-nocrop
 ```
 
+Cached temporal-encoder W&B runs:
+
+```text
+https://wandb.ai/yl2428/pd-hand-vjepa2/runs/ilrd4czf   # hand-crop mean, balanced half, best 34/66
+https://wandb.ai/yl2428/pd-hand-vjepa2/runs/8kd02cml   # hand-crop mean, unweighted half, best 35/66
+https://wandb.ai/yl2428/pd-hand-vjepa2/runs/l2sy70c0   # hand-crop mean+std, unweighted half, best 33/66
+https://wandb.ai/yl2428/pd-hand-vjepa2/runs/oyuagbwf   # no-crop mean, best 37/66
+https://wandb.ai/yl2428/pd-hand-vjepa2/runs/04ofw755   # hand-crop+no-crop concat, best 36/66
+```
+
 ## Submit
 
 From the repo root:
@@ -220,6 +232,63 @@ For the CPU MediaPipe/kinematic baseline:
 ```
 
 Use `--force` to recompute the cached MediaPipe features.
+
+## Cached V-JEPA Temporal Encoder
+
+These scripts cache frozen V-JEPA 2.1 tubelet embeddings, then train small pure-vision temporal heads on the cached sequences. They do not use MediaPipe kinematic signals, `side`, `dx`, or other manifest metadata; `--hand-crop` only changes the visual crop before V-JEPA.
+
+Cache hand-crop mean embeddings:
+
+```bash
+/home/yl2428/.conda/envs/video-llama/bin/python scripts/pd_hand/cache_vjepa21_temporal_embeddings.py \
+  --split both \
+  --hand-crop \
+  --pool mean \
+  --batch-size 1 \
+  --num-workers 2 \
+  --device cuda:0
+```
+
+Cache no-crop mean embeddings:
+
+```bash
+/home/yl2428/.conda/envs/video-llama/bin/python scripts/pd_hand/cache_vjepa21_temporal_embeddings.py \
+  --split both \
+  --pool mean \
+  --batch-size 1 \
+  --num-workers 2 \
+  --device cuda:0
+```
+
+Train a temporal-head sweep with PCA-reduced cached embeddings and W&B logging:
+
+```bash
+WANDB_DIR=/gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/vjepa2_temporal_encoder/item_3_4/fold_0_nocrop \
+/home/yl2428/.conda/envs/video-llama/bin/python scripts/pd_hand/train_vjepa21_temporal_encoder.py \
+  --train-npz /gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/vjepa2_embeddings/item_3_4/fold_0/vjepa21_vitl384_train_32f_step1_12seg_nocrop_mean.npz \
+  --val-npz /gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/vjepa2_embeddings/item_3_4/fold_0/vjepa21_vitl384_val_32f_step1_12seg_nocrop_mean.npz \
+  --out-dir /gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/vjepa2_temporal_encoder/item_3_4/fold_0_nocrop \
+  --epochs 200 \
+  --batch-size 256 \
+  --device cuda:0 \
+  --patience 45 \
+  --pca-dim 128 \
+  --wandb-project pd-hand-vjepa2 \
+  --wandb-run-name item3_4_fold0_vjepa21_nocrop_mean_pca128_sweep \
+  --wandb-mode online
+```
+
+Observed fold-0 validation results from frozen V-JEPA 2.1 cached embeddings:
+
+| Visual cache | Best val accuracy | Best count | Notes |
+| --- | ---: | ---: | --- |
+| hand-crop mean | 53.0% | 35/66 | PCA-128 temporal heads |
+| hand-crop mean+std | 50.0% | 33/66 | PCA-128 temporal heads |
+| no-crop mean | 56.1% | 37/66 | PCA-128 temporal heads |
+| hand-crop + no-crop concat | 54.5% | 36/66 | PCA-128 temporal heads |
+| cross-run probability ensemble | 57.6% | 38/66 | Validation-selected ensemble across saved pure-vision heads |
+
+The target `> 70%` requires at least `47/66` on this validation split. These frozen V-JEPA 2.1 cached-feature runs did not reach that target.
 
 ## Monitor
 
