@@ -326,7 +326,7 @@ TAG=pd-hand-item-3_4-fold-0-acc-vjepa21-dense-statsmeta-scaled-noaug-nocrop \
 RUN_ROOT=/gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/vjepa2_evals/item_3_4/fold_0_accuracy_vjepa21_dense_statsmeta_scaled_noaug_nocrop_h100x2/video_classification_frozen/pd-hand-item-3_4-fold-0-acc-vjepa21-dense-statsmeta-scaled-noaug-nocrop \
 JOB_NAME=vjepa_i34_f0_stmsnc21 \
 LOG_PREFIX=acc_vjepa21_dense_statsmeta_scaled_noaug_nocrop_ddp2 \
-scripts/pd_hand/monitor_item_3_4_fold0.sh <job_id>
+scripts/pd_hand/monitor_item_3_4_fold0.sh 28862043
 ```
 
 ## Current Run State
@@ -386,7 +386,8 @@ As of May 20, 2026 03:50 EDT, the active target is validation accuracy `>= 70%`.
 - Stats-pooling balanced no-augmentation/no-crop job `28862039` failed during validation after live code was patched under the running job; the dataset path is now backward-compatible for pre-patch `ClipDataset` instances.
 - Stats-pooling metadata job `28862041` is running on 2 H100s. It appends manifest metadata one-hots for `side` (`Left`, `Right`) and `dx` (`HC`, `NDC`, `PD`, `PPD`) to the mean/std/max pooled frozen-token vector. Fold 0 train has all six metadata categories; fold 0 validation lacks `PPD`, so that feature is always zero in validation. Startup confirmed W&B online logging and a `StatsPoolingClassifier` input width of `3078`.
 - Stats-pooling metadata epoch 1 reached validation accuracy `33.33333`, Spearman `0.49243`, QWK `0.0`, and MAE `0.96970`, but the selected classifier predicted every validation clip as class 2. The expected-round variant is intended to use the positive expected-score rank signal for raw-accuracy prediction instead of argmax.
-- Stats-pooling metadata expected-round job `28862042` reached epoch 1 validation accuracy `30.30303`, Spearman `0.50118`, QWK `0.0`, and MAE `0.78788`; it was stopped. The next scaled-metadata run multiplies the metadata one-hots by `32.0` before concatenation so the six metadata inputs are not drowned out by the `3072` pooled video-feature dimensions.
+- Stats-pooling metadata expected-round job `28862042` reached epoch 1 validation accuracy `30.30303`, Spearman `0.50118`, QWK `0.0`, and MAE `0.78788`; it was stopped.
+- Scaled-metadata stats job `28862043` is running on 2 H100s. It multiplies metadata one-hots by `32.0` before concatenation so the six metadata inputs are not drowned out by the `3072` pooled video-feature dimensions. Startup confirmed W&B online logging, strict V-JEPA 2.1 checkpoint loading, and `metadata_scale: 32.0`.
 
 ## Learning Criteria
 
