@@ -70,7 +70,7 @@ The monitor prints Slurm state, recent train/validation logs, W&B stderr lines, 
 
 ## Current Run State
 
-As of May 19, 2026 20:38 EDT, job `28861909` is the active weighted CORN online run on `r818u35n11`. It resumed from epoch 3 and started epoch 4 with:
+As of May 19, 2026 21:19 EDT, job `28861909` is the active weighted CORN online run on `r818u35n11`. It resumed from epoch 3 and started epoch 4 with:
 
 ```text
 corn_pos_weight: [0.4502924, 1.9176470, 12.0526314, 1.0]
@@ -88,24 +88,26 @@ Validation has:
 {0: 19, 1: 20, 2: 22, 3: 4, 4: 1}
 ```
 
-The first three epochs were unweighted and did not show ordinal separation. Epoch 4 was weighted but still had QWK `0.0`. Epochs 5-6 are the first weak positive ordinal signal after weighting:
+The first three epochs were unweighted and did not show ordinal separation. Epoch 4 was weighted but still had QWK `0.0`. Epochs 5-8 show a weak but real positive ordinal signal after weighting:
 
 ```text
 epoch 5: val_spearman 0.23088, val_qwk 0.08375, val_mae 0.77273
 epoch 6: val_spearman 0.19113, val_qwk 0.07373, val_mae 0.80303
+epoch 7: val_spearman 0.12704, val_qwk 0.13343, val_mae 0.81818
+epoch 8: val_spearman 0.11729, val_qwk 0.19581, val_mae 0.74242
 ```
 
-Epoch 6 confusion matrix:
+Epoch 8 confusion matrix:
 
 ```text
-[[0, 16, 3, 0, 0],
- [0, 17, 3, 0, 0],
- [0, 19, 3, 0, 0],
+[[0, 18, 1, 0, 0],
+ [0, 20, 0, 0, 0],
+ [0, 21, 1, 0, 0],
  [0,  3, 1, 0, 0],
- [0,  0, 1, 0, 0]]
+ [0,  0, 0, 1, 0]]
 ```
 
-This is not a finished result, but it is enough to keep the weighted run going: QWK and Spearman are positive for two consecutive weighted epochs, and predictions are no longer a single column.
+This is not a finished result, but it is enough to conclude the run is learning some score separation: QWK is positive for four consecutive weighted epochs, QWK improves to `0.19581` by epoch 8, Spearman remains positive, MAE improves, and predictions are no longer a single column. Leave the job running to finish unless later epochs collapse back to QWK `0.0` with a single-column confusion matrix.
 
 ## Learning Criteria
 
