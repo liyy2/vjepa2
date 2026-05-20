@@ -45,6 +45,8 @@ unset SLURM_MEM_PER_GPU
 
 srun --ntasks="${SLURM_NTASKS}" --kill-on-bad-exit=1 /bin/bash -lc '
 set -euo pipefail
+CONDA="${CONDA:-/gpfs/milgram/apps/avx2/software/miniconda/24.11.3/bin/conda}"
+CONDA_ENV="${CONDA_ENV:-video-llama}"
 export HOME=/home/yl2428
 export XDG_CACHE_HOME=/home/yl2428/.cache
 export WANDB_CONFIG_DIR=/home/yl2428/.config/wandb
