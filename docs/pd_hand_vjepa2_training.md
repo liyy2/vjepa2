@@ -212,7 +212,7 @@ TAG=pd-hand-item-3_4-fold-0-acc-vjepa21-dense-softmax-noaug \
 RUN_ROOT=/gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/vjepa2_evals/item_3_4/fold_0_accuracy_vjepa21_dense_softmax_noaug_h100x2/video_classification_frozen/pd-hand-item-3_4-fold-0-acc-vjepa21-dense-softmax-noaug \
 JOB_NAME=vjepa_i34_f0_smna21 \
 LOG_PREFIX=acc_vjepa21_dense_softmax_noaug_ddp2 \
-scripts/pd_hand/monitor_item_3_4_fold0.sh 28862034
+scripts/pd_hand/monitor_item_3_4_fold0.sh 28862035
 ```
 
 ## Current Run State
@@ -264,7 +264,7 @@ As of May 20, 2026 03:50 EDT, the active target is validation accuracy `>= 70%`.
 - Dense softmax comparison job `28862029` reached epoch 1 validation accuracy `30.30303` and was stopped.
 - Dense balanced-softmax comparison job `28862030` failed before the first batch due a weighted-loss autocast dtype mismatch; the loss was fixed and resubmitted as job `28862032`. Job `28862032` reached epoch 1 validation accuracy `30.30303`, stayed weak in epoch 2 training, and was stopped to free the GPU/QOS budget for the no-augmentation run.
 - Dense balanced-softmax no-smoothing comparison job `28862033` is running. It keeps `class_weight: balanced` but removes label smoothing to test direct raw-accuracy optimization. Fold-0 train has no class-4 examples, so the auto class-4 training weight is `0.0`.
-- Dense softmax no-augmentation comparison job `28862034` is running with 2 H100s because only two H100s were available under the current QOS limit. It keeps the dense 32-frame, stride-1, 12-segment coverage settings but disables training RandAugment and random erasing, and constrains random resized crop to `0.9-1.0` square crops.
+- Dense softmax no-augmentation comparison job `28862034` was stopped after the bf16 fix because it had started under the older fp16 autocast path. Replacement job `28862035` is running with 2 H100s because only two H100s were available under the current QOS limit. It keeps the dense 32-frame, stride-1, 12-segment coverage settings but disables training RandAugment and random erasing, and constrains random resized crop to `0.9-1.0` square crops.
 - Future runs after the bf16 fix use true `torch.bfloat16` autocast in the video eval path. Earlier jobs used the existing video-eval behavior, where `use_bfloat16: true` actually selected fp16 autocast.
 
 ## Learning Criteria
