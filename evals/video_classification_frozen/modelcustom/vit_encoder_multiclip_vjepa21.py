@@ -74,6 +74,7 @@ class ClipAggregation(nn.Module):
         self.tubelet_size = tubelet_size
         self.embed_dim = embed_dim = model.embed_dim
         self.num_heads = model.num_heads
+        self._warned_dynamic_pos_embed = False
 
         self.pos_embed = None
         if use_pos_embed:
@@ -83,6 +84,21 @@ class ClipAggregation(nn.Module):
             self.pos_embed = nn.Parameter(torch.zeros(1, max_T, embed_dim), requires_grad=False)
             sincos = get_1d_sincos_pos_embed(embed_dim, max_T)
             self.pos_embed.copy_(torch.from_numpy(sincos).float().unsqueeze(0))
+
+    def _pos_embed_for_length(self, length, device, dtype):
+        if self.pos_embed is not None and length <= self.pos_embed.shape[1]:
+            return self.pos_embed.to(device=device, dtype=dtype)
+
+        if not self._warned_dynamic_pos_embed:
+            logger.warning(
+                "Extending fixed temporal pos_embed on the fly to length %s; "
+                "increase wrapper_kwargs.max_frames to avoid regenerating it.",
+                length,
+            )
+            self._warned_dynamic_pos_embed = True
+
+        sincos = get_1d_sincos_pos_embed(self.embed_dim, length)
+        return torch.from_numpy(sincos).float().unsqueeze(0).to(device=device, dtype=dtype)
 
     def forward(self, x, clip_indices=None):
         num_clips = len(x)
@@ -116,13 +132,11 @@ class ClipAggregation(nn.Module):
                         for indices in raw_indices
                     ]
                     max_index = max(int(indices.max().item()) for indices in temporal_indices)
-                    if max_index >= self.pos_embed.shape[1]:
-                        raise ValueError(
-                            "Temporal pos_embed too short: "
-                            f"max index {max_index}, pos_embed length {self.pos_embed.shape[1]}. "
-                            "Increase wrapper_kwargs.max_frames."
-                        )
-                    pos_embed = self.pos_embed.repeat(B, 1, 1)
+                    pos_embed = self._pos_embed_for_length(
+                        max_index + 1,
+                        device=outputs_i.device,
+                        dtype=outputs_i.dtype,
+                    ).repeat(B, 1, 1)
                     pos_embed = apply_masks(pos_embed, temporal_indices, concat=False)
                     pos_embed = torch.cat(pos_embed, dim=1)
                     pos_embed = pos_embed.unsqueeze(2).repeat(1, 1, S, 1)

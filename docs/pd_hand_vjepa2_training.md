@@ -60,7 +60,7 @@ https://wandb.ai/yl2428/pd-hand-vjepa2/runs/pd-hand-item-3_4-fold-0-spearman
 The accuracy-targeted dense online run id is:
 
 ```text
-https://wandb.ai/yl2428/pd-hand-vjepa2/runs/pd-hand-item-3_4-fold-0-acc-vjepa21-dense
+https://wandb.ai/yl2428/pd-hand-vjepa2/runs/pd-hand-item-3_4-fold-0-acc-vjepa21-dense-pos4096
 ```
 
 ## Submit
@@ -112,8 +112,8 @@ scripts/pd_hand/monitor_item_3_4_fold0.sh 28861962
 For the accuracy-targeted dense run:
 
 ```bash
-TAG=pd-hand-item-3_4-fold-0-acc-vjepa21-dense \
-RUN_ROOT=/gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/vjepa2_evals/item_3_4/fold_0_accuracy_vjepa21_dense_h100x3/video_classification_frozen/pd-hand-item-3_4-fold-0-acc-vjepa21-dense \
+TAG=pd-hand-item-3_4-fold-0-acc-vjepa21-dense-pos4096 \
+RUN_ROOT=/gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/vjepa2_evals/item_3_4/fold_0_accuracy_vjepa21_dense_h100x3/video_classification_frozen/pd-hand-item-3_4-fold-0-acc-vjepa21-dense-pos4096 \
 JOB_NAME=vjepa_i34_f0_acc21 \
 LOG_PREFIX=acc_vjepa21_dense_ddp3 \
 scripts/pd_hand/monitor_item_3_4_fold0.sh <job_id>
@@ -160,11 +160,11 @@ Epoch 8 confusion matrix:
 
 This is not a finished result, but it is enough to conclude the run is learning some score separation: QWK is positive for four consecutive weighted epochs, QWK improves to `0.19581` by epoch 8, Spearman remains positive, MAE improves, and predictions are no longer a single column. Leave the job running to finish unless later epochs collapse back to QWK `0.0` with a single-column confusion matrix.
 
-As of May 20, 2026 00:19 EDT, the active target is validation accuracy `>= 70%`.
+As of May 20, 2026 00:57 EDT, the active target is validation accuracy `>= 70%`.
 
-- QWK-selected job `28861909` is still running. The latest completed row is epoch 16: validation accuracy `36.36364`, Spearman `0.25111`, QWK `0.25898`, MAE `0.87879`, train coverage `54.8%/97.6%`, validation coverage `53.3%/97.9%`.
-- Spearman-targeted job `28861962` is still running. The latest completed row is epoch 4: validation accuracy `33.33334`, Spearman `0.20059`, QWK `0.00000`, MAE `1.21212`, train coverage `54.7%/97.6%`, validation coverage `53.3%/97.8%`.
-- The new accuracy-targeted dense config uses the V-JEPA 2.1-specific wrapper, strict `ema_encoder` checkpoint loading, deterministic validation sampling, temporal position embeddings, `frames_per_clip: 32`, `frame_step: 1`, `num_segments: 12`, `batch_size: 1`, and `selection_metric: accuracy`.
+- QWK-selected job `28861909` and Spearman-targeted job `28861962` were stopped because they used the older wrapper and were well below the target.
+- Accuracy-targeted dense job `28861995` reached epoch 1 batch 60, then failed because one clip needed temporal index `603` while `max_frames: 1024` only created 512 temporal-token positions.
+- The fixed accuracy-targeted dense config uses the V-JEPA 2.1-specific wrapper, strict `ema_encoder` checkpoint loading, deterministic validation sampling, temporal position embeddings, `frames_per_clip: 32`, `frame_step: 1`, `num_segments: 12`, `batch_size: 1`, `selection_metric: accuracy`, and `max_frames: 4096`. Its W&B/output tag is `pd-hand-item-3_4-fold-0-acc-vjepa21-dense-pos4096`.
 
 ## Learning Criteria
 
@@ -208,9 +208,11 @@ frame_step: 1
 num_segments: 12
 num_views_per_segment: 1
 wrapper_kwargs:
-  max_frames: 1024
+  max_frames: 4096
   use_pos_embed: true
 ```
+
+`max_frames: 4096` gives 2048 temporal-token positions with tubelet size 2, enough for clips well beyond the nominal 20 second / 30 fps case. The wrapper also regenerates a fixed sine/cosine table on the fly if a sampled clip exceeds the configured range.
 
 Preflight on May 20, 2026 confirmed strict V-JEPA 2.1 checkpoint loading with all keys matched. A deterministic validation sampling smoke test on the first three fold-0 validation clips produced raw-frame coverage between `96.7%` and `99.7%`, with matching repeated indices for the same sample.
 

@@ -5,7 +5,7 @@ mem_per_gpu: 80G
 nodes: 1
 max_workers: 2
 resume_checkpoint: false
-tag: pd-hand-item-3_4-fold-0-acc-vjepa21-dense
+tag: pd-hand-item-3_4-fold-0-acc-vjepa21-dense-pos4096
 tasks_per_node: 3
 experiment:
   classifier:
@@ -119,7 +119,7 @@ model_kwargs:
       n_output_distillation: 1
       strict_state_dict: true
   wrapper_kwargs:
-    max_frames: 1024
+    max_frames: 4096
     use_pos_embed: true
 num_workers: 2
 wandb:
@@ -128,8 +128,8 @@ wandb:
   entity: yl2428
   mode: online
   group: pd-hand-item-3_4-accuracy
-  name: pd-hand-item-3_4-fold-0-acc-vjepa21-dense
-  id: pd-hand-item-3_4-fold-0-acc-vjepa21-dense
+  name: pd-hand-item-3_4-fold-0-acc-vjepa21-dense-pos4096
+  id: pd-hand-item-3_4-fold-0-acc-vjepa21-dense-pos4096
   resume: allow
   job_type: video_classification_frozen
   tags:
