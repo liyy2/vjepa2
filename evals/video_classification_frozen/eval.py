@@ -84,6 +84,7 @@ def main(args_eval, resume_preempt=False):
     num_heads = args_classifier.get("num_heads", 16)
     head_type = args_classifier.get("head_type", "softmax")
     head_kwargs = args_classifier.get("head_kwargs", {}) or {}
+    prediction_mode = args_classifier.get("prediction_mode", "argmax")
     selection_metric = args_classifier.get(
         "selection_metric",
         "quadratic_weighted_kappa" if head_type == "corn" else "val_acc",
@@ -334,6 +335,7 @@ def main(args_eval, resume_preempt=False):
                 corn_pos_weight=corn_pos_weight,
                 class_weight=softmax_class_weight,
                 label_smoothing=label_smoothing,
+                prediction_mode=prediction_mode,
             )
             train_acc = train_result["acc"]
 
@@ -354,6 +356,7 @@ def main(args_eval, resume_preempt=False):
             class_weight=softmax_class_weight,
             label_smoothing=label_smoothing,
             selection_metric=selection_metric,
+            prediction_mode=prediction_mode,
         )
         val_acc = val_result["acc"]
 
@@ -446,6 +449,7 @@ def run_one_epoch(
     class_weight=None,
     label_smoothing=0.0,
     selection_metric=None,
+    prediction_mode="argmax",
 ):
 
     for c in classifiers:
@@ -527,16 +531,22 @@ def run_one_epoch(
                         ordinal_labels[classifier_idx].extend(labels_cpu)
             else:
                 outputs = [sum([F.softmax(o, dim=1) for o in coutputs]) / len(coutputs) for coutputs in outputs]
-                pred_outputs = [coutputs.max(dim=1).indices for coutputs in outputs]
+                score_range = torch.arange(num_classes, device=device, dtype=outputs[0].dtype)
+                score_outputs = [(probs_i * score_range).sum(dim=1) for probs_i in outputs]
+                if prediction_mode == "expected_round":
+                    pred_outputs = [
+                        scores_i.round().clamp(0, num_classes - 1).long()
+                        for scores_i in score_outputs
+                    ]
+                else:
+                    pred_outputs = [coutputs.max(dim=1).indices for coutputs in outputs]
                 top1_accs = [
                     100.0 * pred_outputs_i.eq(labels).sum() / batch_size
                     for pred_outputs_i in pred_outputs
                 ]
                 if not training:
-                    score_range = torch.arange(num_classes, device=device, dtype=outputs[0].dtype)
                     labels_cpu = labels.detach().cpu().long().numpy().tolist()
-                    for classifier_idx, (probs_i, preds_i) in enumerate(zip(outputs, pred_outputs)):
-                        scores_i = (probs_i * score_range).sum(dim=1)
+                    for classifier_idx, (scores_i, preds_i) in enumerate(zip(score_outputs, pred_outputs)):
                         ordinal_scores[classifier_idx].extend(scores_i.detach().cpu().float().numpy().tolist())
                         ordinal_preds[classifier_idx].extend(preds_i.detach().cpu().long().numpy().tolist())
                         ordinal_labels[classifier_idx].extend(labels_cpu)
