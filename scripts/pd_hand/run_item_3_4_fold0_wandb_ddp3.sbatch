@@ -45,6 +45,9 @@ unset SLURM_MEM_PER_GPU
 
 srun --ntasks="${SLURM_NTASKS}" --kill-on-bad-exit=1 /bin/bash -lc '
 set -euo pipefail
+REPO="${REPO:-/gpfs/milgram/pi/scherzer/yl2428/vjepa2}"
+CONFIG="${CONFIG:-${REPO}/configs/eval_2_1/pd_hand_item_3_4_fold0_vjepa2_1_vitl_ssv2_corn.yaml}"
+RUN_FOLDER="${RUN_FOLDER:-/gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/vjepa2_evals/item_3_4/fold_0_ddp3_h100x3}"
 CONDA="${CONDA:-/gpfs/milgram/apps/avx2/software/miniconda/24.11.3/bin/conda}"
 CONDA_ENV="${CONDA_ENV:-video-llama}"
 export HOME=/home/yl2428
