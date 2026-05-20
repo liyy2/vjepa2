@@ -101,6 +101,8 @@ def main(args_eval, resume_preempt=False):
     num_views_per_segment = args_data.get("num_views_per_segment", 1)
     normalization = args_data.get("normalization", None)
     corn_pos_weight = None
+    softmax_class_weight = None
+    label_smoothing = 0.0
     if head_type == "corn":
         corn_pos_weight = _resolve_corn_pos_weight(
             args_classifier.get("corn_pos_weight"),
@@ -109,6 +111,17 @@ def main(args_eval, resume_preempt=False):
         )
         if corn_pos_weight is not None:
             logger.info(f"Using CORN pos_weight: {corn_pos_weight.tolist()}")
+    else:
+        softmax_class_weight = _resolve_class_weight(
+            args_classifier.get("class_weight"),
+            train_data_path,
+            num_classes,
+        )
+        label_smoothing = float(args_classifier.get("label_smoothing", 0.0) or 0.0)
+        if softmax_class_weight is not None:
+            logger.info(f"Using softmax class_weight: {softmax_class_weight.tolist()}")
+        if label_smoothing:
+            logger.info(f"Using softmax label_smoothing: {label_smoothing}")
 
     # -- OPTIMIZATION
     args_opt = args_exp.get("optimization")
@@ -154,7 +167,7 @@ def main(args_eval, resume_preempt=False):
     metrics_path = os.path.join(folder, "metrics_latest.json")
 
     # -- make loggers
-    if head_type == "corn":
+    if head_type in ("corn", "softmax"):
         log_fields = (
             ("%d", "epoch"),
             ("%.5f", "train_acc"),
@@ -309,6 +322,8 @@ def main(args_eval, resume_preempt=False):
                 head_type=head_type,
                 num_classes=num_classes,
                 corn_pos_weight=corn_pos_weight,
+                class_weight=softmax_class_weight,
+                label_smoothing=label_smoothing,
             )
             train_acc = train_result["acc"]
 
@@ -326,6 +341,8 @@ def main(args_eval, resume_preempt=False):
             head_type=head_type,
             num_classes=num_classes,
             corn_pos_weight=corn_pos_weight,
+            class_weight=softmax_class_weight,
+            label_smoothing=label_smoothing,
             selection_metric=selection_metric,
         )
         val_acc = val_result["acc"]
@@ -347,7 +364,7 @@ def main(args_eval, resume_preempt=False):
             )
         )
         if rank == 0:
-            if head_type == "corn":
+            if head_type in ("corn", "softmax"):
                 log_values = (
                     epoch + 1,
                     train_acc,
@@ -416,6 +433,8 @@ def run_one_epoch(
     head_type="softmax",
     num_classes=None,
     corn_pos_weight=None,
+    class_weight=None,
+    label_smoothing=0.0,
     selection_metric=None,
 ):
 
@@ -432,7 +451,12 @@ def run_one_epoch(
             pos_weight=corn_pos_weight,
         )
     else:
-        criterion = torch.nn.CrossEntropyLoss()
+        if class_weight is not None:
+            class_weight = class_weight.to(device)
+        criterion = torch.nn.CrossEntropyLoss(
+            weight=class_weight,
+            label_smoothing=float(label_smoothing or 0.0),
+        )
     top1_meters = [AverageMeter() for _ in classifiers]
     coverage_meters = {key: AverageMeter() for key in ("coverage_rate", "temporal_span_rate")}
     ordinal_scores = [[] for _ in classifiers]
@@ -483,7 +507,19 @@ def run_one_epoch(
                         ordinal_labels[classifier_idx].extend(labels_cpu)
             else:
                 outputs = [sum([F.softmax(o, dim=1) for o in coutputs]) / len(coutputs) for coutputs in outputs]
-                top1_accs = [100.0 * coutputs.max(dim=1).indices.eq(labels).sum() / batch_size for coutputs in outputs]
+                pred_outputs = [coutputs.max(dim=1).indices for coutputs in outputs]
+                top1_accs = [
+                    100.0 * pred_outputs_i.eq(labels).sum() / batch_size
+                    for pred_outputs_i in pred_outputs
+                ]
+                if not training:
+                    score_range = torch.arange(num_classes, device=device, dtype=outputs[0].dtype)
+                    labels_cpu = labels.detach().cpu().long().numpy().tolist()
+                    for classifier_idx, (probs_i, preds_i) in enumerate(zip(outputs, pred_outputs)):
+                        scores_i = (probs_i * score_range).sum(dim=1)
+                        ordinal_scores[classifier_idx].extend(scores_i.detach().cpu().float().numpy().tolist())
+                        ordinal_preds[classifier_idx].extend(preds_i.detach().cpu().long().numpy().tolist())
+                        ordinal_labels[classifier_idx].extend(labels_cpu)
             top1_accs = [float(AllReduce.apply(t1a)) for t1a in top1_accs]
             for t1m, t1a in zip(top1_meters, top1_accs):
                 t1m.update(t1a)
@@ -515,7 +551,7 @@ def run_one_epoch(
         "acc": float(_agg_top1.max()),
         "coverage": {key: float(meter.avg) for key, meter in coverage_meters.items() if meter.count > 0},
     }
-    if head_type == "corn" and not training:
+    if head_type in ("corn", "softmax") and not training:
         per_classifier = []
         for scores_i, preds_i, labels_i in zip(ordinal_scores, ordinal_preds, ordinal_labels):
             gathered_scores = _all_gather_python_list(scores_i)
@@ -531,7 +567,7 @@ def run_one_epoch(
             )
         best_idx = _best_metric_index(
             per_classifier,
-            selection_metric or "quadratic_weighted_kappa",
+            selection_metric or ("quadratic_weighted_kappa" if head_type == "corn" else "accuracy"),
         )
         result.update(per_classifier[best_idx])
         result["best_classifier"] = int(best_idx)
@@ -616,6 +652,32 @@ def _resolve_corn_pos_weight(config_value, train_paths, num_classes):
     raise ValueError("corn_pos_weight must be 'auto', a list of weights, false, or omitted.")
 
 
+def _resolve_class_weight(config_value, train_paths, num_classes):
+    if config_value in (None, False):
+        return None
+    if isinstance(config_value, str) and config_value.lower() in ("auto", "balanced"):
+        labels = _read_labels_from_csvs(train_paths)
+        if not labels:
+            raise ValueError("class_weight=auto requires labels in the train CSV.")
+        counts = np.bincount(np.array(labels, dtype=np.int64), minlength=num_classes)
+        total = float(counts.sum())
+        weights = [
+            total / (num_classes * float(count)) if count > 0 else 0.0
+            for count in counts[:num_classes]
+        ]
+        logger.info(
+            "Auto softmax class counts: %s",
+            {int(idx): int(count) for idx, count in enumerate(counts[:num_classes])},
+        )
+        return torch.tensor(weights, dtype=torch.float32)
+    if isinstance(config_value, (list, tuple)):
+        weights = [float(value) for value in config_value]
+        if len(weights) != num_classes:
+            raise ValueError(f"Expected {num_classes} class weights, got {len(weights)}.")
+        return torch.tensor(weights, dtype=torch.float32)
+    raise ValueError("class_weight must be 'auto'/'balanced', a list of weights, false, or omitted.")
+
+
 def _read_labels_from_csvs(paths):
     labels = []
     for path in paths:
@@ -665,6 +727,8 @@ def _all_gather_python_list(values):
 
 
 def _best_metric_index(metrics, key):
+    if key == "val_acc":
+        key = "accuracy"
     values = [m.get(key, float("nan")) for m in metrics]
     finite = [v if isinstance(v, (int, float)) and np.isfinite(v) else float("-inf") for v in values]
     return int(np.argmax(finite))
@@ -675,6 +739,7 @@ def _ordinal_metrics(labels, predictions, scores, num_classes):
         return {
             "n": 0,
             "accuracy": float("nan"),
+            "val_acc": float("nan"),
             "spearman": float("nan"),
             "quadratic_weighted_kappa": float("nan"),
             "mae": float("nan"),
@@ -685,6 +750,7 @@ def _ordinal_metrics(labels, predictions, scores, num_classes):
     return {
         "n": int(labels.size),
         "accuracy": float(100.0 * np.mean(predictions == labels)),
+        "val_acc": float(100.0 * np.mean(predictions == labels)),
         "spearman": _spearman(labels.astype(float), scores.astype(float)),
         "quadratic_weighted_kappa": _quadratic_weighted_kappa(labels, predictions, num_classes),
         "mae": float(np.mean(np.abs(predictions - labels))),

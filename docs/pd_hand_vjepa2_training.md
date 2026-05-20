@@ -8,6 +8,7 @@ This runbook documents the one-fold PD hand-task probe run for `item_3_4` on V-J
 - Spearman-targeted Slurm script: `scripts/pd_hand/run_item_3_4_fold0_spearman_wandb_ddp3.sbatch`
 - Accuracy-targeted V-JEPA 2.1 dense Slurm script: `scripts/pd_hand/run_item_3_4_fold0_accuracy_vjepa21_dense_wandb_ddp3.sbatch`
 - Accuracy-targeted V-JEPA 2.1 dense softmax Slurm script: `scripts/pd_hand/run_item_3_4_fold0_accuracy_vjepa21_dense_softmax_wandb_ddp3.sbatch`
+- Accuracy-targeted V-JEPA 2.1 dense balanced-softmax Slurm script: `scripts/pd_hand/run_item_3_4_fold0_accuracy_vjepa21_dense_softmax_balanced_wandb_ddp3.sbatch`
 - W&B auth preflight: `scripts/pd_hand/prepare_wandb_auth.sh`
 - Monitor helper: `scripts/pd_hand/monitor_item_3_4_fold0.sh`
 - V-JEPA 2.1 multiclip wrapper: `evals/video_classification_frozen/modelcustom/vit_encoder_multiclip_vjepa21.py`
@@ -15,10 +16,12 @@ This runbook documents the one-fold PD hand-task probe run for `item_3_4` on V-J
 - Spearman-targeted config: `configs/eval_2_1/pd_hand_item_3_4_fold0_vjepa2_1_vitl_ssv2_corn_spearman.yaml`
 - Accuracy-targeted dense config: `configs/eval_2_1/pd_hand_item_3_4_fold0_vjepa2_1_vitl384_corn_accuracy_dense.yaml`
 - Accuracy-targeted dense softmax config: `configs/eval_2_1/pd_hand_item_3_4_fold0_vjepa2_1_vitl384_softmax_accuracy_dense.yaml`
+- Accuracy-targeted dense balanced-softmax config: `configs/eval_2_1/pd_hand_item_3_4_fold0_vjepa2_1_vitl384_softmax_balanced_accuracy_dense.yaml`
 - Current output root: `/gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/vjepa2_evals/item_3_4/fold_0_ddp3_h100x3`
 - Spearman-targeted output root: `/gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/vjepa2_evals/item_3_4/fold_0_spearman_h100x3`
 - Accuracy-targeted dense output root: `/gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/vjepa2_evals/item_3_4/fold_0_accuracy_vjepa21_dense_h100x3`
 - Accuracy-targeted dense softmax output root: `/gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/vjepa2_evals/item_3_4/fold_0_accuracy_vjepa21_dense_softmax_h100x3`
+- Accuracy-targeted dense balanced-softmax output root: `/gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/vjepa2_evals/item_3_4/fold_0_accuracy_vjepa21_dense_softmax_balanced_h100x3`
 - Current Slurm logs: `/gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/vjepa2_evals/item_3_4/fold_0/run_logs/`
 - Current external split CSVs: `/gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/splits/item_3_4/`
 
@@ -72,6 +75,12 @@ The accuracy-targeted dense softmax online run id is:
 https://wandb.ai/yl2428/pd-hand-vjepa2/runs/pd-hand-item-3_4-fold-0-acc-vjepa21-dense-softmax
 ```
 
+The accuracy-targeted dense balanced-softmax online run id is:
+
+```text
+https://wandb.ai/yl2428/pd-hand-vjepa2/runs/pd-hand-item-3_4-fold-0-acc-vjepa21-dense-softmax-balanced
+```
+
 ## Submit
 
 From the repo root:
@@ -98,6 +107,12 @@ For the softmax comparison run using the same dense V-JEPA 2.1 sampling:
 
 ```bash
 sbatch scripts/pd_hand/run_item_3_4_fold0_accuracy_vjepa21_dense_softmax_wandb_ddp3.sbatch
+```
+
+For the balanced softmax comparison run:
+
+```bash
+sbatch scripts/pd_hand/run_item_3_4_fold0_accuracy_vjepa21_dense_softmax_balanced_wandb_ddp3.sbatch
 ```
 
 ## Monitor
@@ -138,6 +153,16 @@ RUN_ROOT=/gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_m
 JOB_NAME=vjepa_i34_f0_sm21 \
 LOG_PREFIX=acc_vjepa21_dense_softmax_ddp3 \
 scripts/pd_hand/monitor_item_3_4_fold0.sh 28862029
+```
+
+For the accuracy-targeted dense balanced-softmax run:
+
+```bash
+TAG=pd-hand-item-3_4-fold-0-acc-vjepa21-dense-softmax-balanced \
+RUN_ROOT=/gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/vjepa2_evals/item_3_4/fold_0_accuracy_vjepa21_dense_softmax_balanced_h100x3/video_classification_frozen/pd-hand-item-3_4-fold-0-acc-vjepa21-dense-softmax-balanced \
+JOB_NAME=vjepa_i34_f0_smb21 \
+LOG_PREFIX=acc_vjepa21_dense_softmax_balanced_ddp3 \
+scripts/pd_hand/monitor_item_3_4_fold0.sh <job_id>
 ```
 
 ## Current Run State
@@ -187,6 +212,7 @@ As of May 20, 2026 01:05 EDT, the active target is validation accuracy `>= 70%`.
 - Accuracy-targeted dense job `28861995` reached epoch 1 batch 60, then failed because one clip needed temporal index `603` while `max_frames: 1024` only created 512 temporal-token positions.
 - Fixed accuracy-targeted dense job `28862001` is running on `r818u29n11`. It uses the V-JEPA 2.1-specific wrapper, strict `ema_encoder` checkpoint loading, deterministic validation sampling, temporal position embeddings, `frames_per_clip: 32`, `frame_step: 1`, `num_segments: 12`, `batch_size: 1`, `selection_metric: accuracy`, and `max_frames: 4096`. Its W&B/output tag is `pd-hand-item-3_4-fold-0-acc-vjepa21-dense-pos4096`.
 - Dense softmax comparison job `28862029` is pending on resources. It keeps the same encoder and sampling but uses `head_type: softmax` and `selection_metric: val_acc` to test whether direct cross-entropy optimizes the requested accuracy target better than CORN.
+- Dense balanced-softmax comparison uses the same setup plus `class_weight: balanced` and `label_smoothing: 0.05`. Fold-0 train has no class-4 examples, so the auto class-4 training weight is `0.0`.
 
 ## Learning Criteria
 
