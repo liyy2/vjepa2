@@ -6,12 +6,16 @@ This runbook documents the one-fold PD hand-task probe run for `item_3_4` on V-J
 
 - Slurm submit script: `scripts/pd_hand/run_item_3_4_fold0_wandb_ddp3.sbatch`
 - Spearman-targeted Slurm script: `scripts/pd_hand/run_item_3_4_fold0_spearman_wandb_ddp3.sbatch`
+- Accuracy-targeted V-JEPA 2.1 dense Slurm script: `scripts/pd_hand/run_item_3_4_fold0_accuracy_vjepa21_dense_wandb_ddp3.sbatch`
 - W&B auth preflight: `scripts/pd_hand/prepare_wandb_auth.sh`
 - Monitor helper: `scripts/pd_hand/monitor_item_3_4_fold0.sh`
+- V-JEPA 2.1 multiclip wrapper: `evals/video_classification_frozen/modelcustom/vit_encoder_multiclip_vjepa21.py`
 - Repo-local config: `configs/eval_2_1/pd_hand_item_3_4_fold0_vjepa2_1_vitl_ssv2_corn.yaml`
 - Spearman-targeted config: `configs/eval_2_1/pd_hand_item_3_4_fold0_vjepa2_1_vitl_ssv2_corn_spearman.yaml`
+- Accuracy-targeted dense config: `configs/eval_2_1/pd_hand_item_3_4_fold0_vjepa2_1_vitl384_corn_accuracy_dense.yaml`
 - Current output root: `/gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/vjepa2_evals/item_3_4/fold_0_ddp3_h100x3`
 - Spearman-targeted output root: `/gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/vjepa2_evals/item_3_4/fold_0_spearman_h100x3`
+- Accuracy-targeted dense output root: `/gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/vjepa2_evals/item_3_4/fold_0_accuracy_vjepa21_dense_h100x3`
 - Current Slurm logs: `/gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/vjepa2_evals/item_3_4/fold_0/run_logs/`
 - Current external split CSVs: `/gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/splits/item_3_4/`
 
@@ -53,6 +57,12 @@ The Spearman-targeted online run id is:
 https://wandb.ai/yl2428/pd-hand-vjepa2/runs/pd-hand-item-3_4-fold-0-spearman
 ```
 
+The accuracy-targeted dense online run id is:
+
+```text
+https://wandb.ai/yl2428/pd-hand-vjepa2/runs/pd-hand-item-3_4-fold-0-acc-vjepa21-dense
+```
+
 ## Submit
 
 From the repo root:
@@ -67,6 +77,12 @@ For a same-fold run that selects heads and checkpoints by Spearman instead of QW
 
 ```bash
 sbatch scripts/pd_hand/run_item_3_4_fold0_spearman_wandb_ddp3.sbatch
+```
+
+For the corrected V-JEPA 2.1 dense run targeting validation accuracy `>= 70%`:
+
+```bash
+sbatch scripts/pd_hand/run_item_3_4_fold0_accuracy_vjepa21_dense_wandb_ddp3.sbatch
 ```
 
 ## Monitor
@@ -91,6 +107,16 @@ RUN_ROOT=/gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_m
 JOB_NAME=vjepa_i34_f0_sp3 \
 LOG_PREFIX=spearman_ddp3 \
 scripts/pd_hand/monitor_item_3_4_fold0.sh 28861962
+```
+
+For the accuracy-targeted dense run:
+
+```bash
+TAG=pd-hand-item-3_4-fold-0-acc-vjepa21-dense \
+RUN_ROOT=/gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/vjepa2_evals/item_3_4/fold_0_accuracy_vjepa21_dense_h100x3/video_classification_frozen/pd-hand-item-3_4-fold-0-acc-vjepa21-dense \
+JOB_NAME=vjepa_i34_f0_acc21 \
+LOG_PREFIX=acc_vjepa21_dense_ddp3 \
+scripts/pd_hand/monitor_item_3_4_fold0.sh <job_id>
 ```
 
 ## Current Run State
@@ -134,11 +160,11 @@ Epoch 8 confusion matrix:
 
 This is not a finished result, but it is enough to conclude the run is learning some score separation: QWK is positive for four consecutive weighted epochs, QWK improves to `0.19581` by epoch 8, Spearman remains positive, MAE improves, and predictions are no longer a single column. Leave the job running to finish unless later epochs collapse back to QWK `0.0` with a single-column confusion matrix.
 
-As of May 19, 2026 23:15 EDT, the stricter active target is validation Spearman `>= 0.6`.
+As of May 20, 2026 00:19 EDT, the active target is validation accuracy `>= 70%`.
 
-- QWK-selected job `28861909` is still running. The latest completed row is epoch 13: validation accuracy `37.87879`, Spearman `0.24966`, QWK `0.30895`, MAE `0.80303`, train coverage `54.9%/97.6%`, validation coverage `53.3%/97.8%`.
-- Spearman-targeted job `28861962` is still running. The latest completed row is epoch 1: validation accuracy `33.33334`, Spearman `0.25802`, QWK `0.00000`, MAE `1.21212`, train coverage `54.7%/97.5%`, validation coverage `53.3%/97.8%`. W&B launched successfully, and the run uses `selection_metric: spearman`, W&B run id `pd-hand-item-3_4-fold-0-spearman`, and `num_epochs: 40`.
-- The Spearman-targeted epoch 1 confusion matrix still predicts all validation examples as class 0, so the positive Spearman is not enough evidence by itself; keep the run going and watch for prediction spread across adjacent score bins.
+- QWK-selected job `28861909` is still running. The latest completed row is epoch 16: validation accuracy `36.36364`, Spearman `0.25111`, QWK `0.25898`, MAE `0.87879`, train coverage `54.8%/97.6%`, validation coverage `53.3%/97.9%`.
+- Spearman-targeted job `28861962` is still running. The latest completed row is epoch 4: validation accuracy `33.33334`, Spearman `0.20059`, QWK `0.00000`, MAE `1.21212`, train coverage `54.7%/97.6%`, validation coverage `53.3%/97.8%`.
+- The new accuracy-targeted dense config uses the V-JEPA 2.1-specific wrapper, strict `ema_encoder` checkpoint loading, deterministic validation sampling, temporal position embeddings, `frames_per_clip: 32`, `frame_step: 1`, `num_segments: 12`, `batch_size: 1`, and `selection_metric: accuracy`.
 
 ## Learning Criteria
 
@@ -173,6 +199,20 @@ val temporal span:        97.7-97.8%
 ```
 
 Raw coverage is the fraction of individual source frames sampled. Temporal span is the fraction from the earliest sampled frame to the latest sampled frame, so high span means the run touches almost the full video duration even though it does not use every raw frame.
+
+Dense V-JEPA 2.1 accuracy run temporal settings:
+
+```yaml
+frames_per_clip: 32
+frame_step: 1
+num_segments: 12
+num_views_per_segment: 1
+wrapper_kwargs:
+  max_frames: 1024
+  use_pos_embed: true
+```
+
+Preflight on May 20, 2026 confirmed strict V-JEPA 2.1 checkpoint loading with all keys matched. A deterministic validation sampling smoke test on the first three fold-0 validation clips produced raw-frame coverage between `96.7%` and `99.7%`, with matching repeated indices for the same sample.
 
 ## If The Weighted Run Still Collapses
 

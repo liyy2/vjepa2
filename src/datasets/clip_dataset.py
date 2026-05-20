@@ -282,13 +282,20 @@ class ClipDataset(torch.utils.data.Dataset):
         all_indices, clip_indices = [], []
         for clip_idx in range(self.num_clips):
             if partition_len > clip_len:
-                end_index = clip_len
                 if self.random_clip_sampling:
+                    end_index = clip_len
                     end_index = np.random.randint(clip_len, partition_len)
-                start_index = end_index - clip_len
+                    start_index = end_index - clip_len
+                    start_index = start_index + clip_idx * partition_len
+                    end_index = end_index + clip_idx * partition_len
+                else:
+                    if self.num_clips > 1 and len(vr) > clip_len:
+                        start_index = int(round(clip_idx * (len(vr) - clip_len) / (self.num_clips - 1)))
+                    else:
+                        start_index = 0
+                    end_index = start_index + clip_len
                 indices = np.linspace(start_index, end_index, num=fpc)
                 indices = np.clip(indices, start_index, end_index - 1).astype(np.int64)
-                indices = indices + clip_idx * partition_len
             else:
                 if not self.allow_clip_overlap:
                     indices = np.linspace(0, partition_len, num=partition_len // frame_step)
