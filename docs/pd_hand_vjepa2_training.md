@@ -13,6 +13,7 @@ This runbook documents the one-fold PD hand-task probe run for `item_3_4` on V-J
 - Accuracy-targeted V-JEPA 2.1 dense softmax no-augmentation Slurm script: `scripts/pd_hand/run_item_3_4_fold0_accuracy_vjepa21_dense_softmax_noaug_wandb_ddp2.sbatch`
 - Accuracy-targeted V-JEPA 2.1 dense softmax no-augmentation/no-crop Slurm script: `scripts/pd_hand/run_item_3_4_fold0_accuracy_vjepa21_dense_softmax_noaug_nocrop_wandb_ddp2.sbatch`
 - Accuracy-targeted V-JEPA 2.1 dense stats-head balanced no-augmentation/no-crop Slurm script: `scripts/pd_hand/run_item_3_4_fold0_accuracy_vjepa21_dense_stats_balanced_noaug_nocrop_wandb_ddp2.sbatch`
+- Accuracy-targeted V-JEPA 2.1 dense stats-head metadata balanced no-augmentation/no-crop Slurm script: `scripts/pd_hand/run_item_3_4_fold0_accuracy_vjepa21_dense_statsmeta_balanced_noaug_nocrop_wandb_ddp2.sbatch`
 - W&B auth preflight: `scripts/pd_hand/prepare_wandb_auth.sh`
 - Monitor helper: `scripts/pd_hand/monitor_item_3_4_fold0.sh`
 - V-JEPA 2.1 multiclip wrapper: `evals/video_classification_frozen/modelcustom/vit_encoder_multiclip_vjepa21.py`
@@ -25,6 +26,7 @@ This runbook documents the one-fold PD hand-task probe run for `item_3_4` on V-J
 - Accuracy-targeted dense softmax no-augmentation config: `configs/eval_2_1/pd_hand_item_3_4_fold0_vjepa2_1_vitl384_softmax_noaug_accuracy_dense.yaml`
 - Accuracy-targeted dense softmax no-augmentation/no-MediaPipe-crop config: `configs/eval_2_1/pd_hand_item_3_4_fold0_vjepa2_1_vitl384_softmax_noaug_nocrop_accuracy_dense.yaml`
 - Accuracy-targeted dense stats-head balanced no-augmentation/no-MediaPipe-crop config: `configs/eval_2_1/pd_hand_item_3_4_fold0_vjepa2_1_vitl384_stats_balanced_noaug_nocrop_accuracy_dense.yaml`
+- Accuracy-targeted dense stats-head metadata balanced no-augmentation/no-MediaPipe-crop config: `configs/eval_2_1/pd_hand_item_3_4_fold0_vjepa2_1_vitl384_statsmeta_balanced_noaug_nocrop_accuracy_dense.yaml`
 - Current output root: `/gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/vjepa2_evals/item_3_4/fold_0_ddp3_h100x3`
 - Spearman-targeted output root: `/gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/vjepa2_evals/item_3_4/fold_0_spearman_h100x3`
 - Accuracy-targeted dense output root: `/gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/vjepa2_evals/item_3_4/fold_0_accuracy_vjepa21_dense_h100x3`
@@ -109,6 +111,12 @@ The accuracy-targeted dense softmax no-augmentation/no-crop online run id is:
 https://wandb.ai/yl2428/pd-hand-vjepa2/runs/pd-hand-item-3_4-fold-0-acc-vjepa21-dense-softmax-noaug-nocrop
 ```
 
+The accuracy-targeted dense stats-head metadata no-augmentation/no-crop online run id is:
+
+```text
+https://wandb.ai/yl2428/pd-hand-vjepa2/runs/pd-hand-item-3_4-fold-0-acc-vjepa21-dense-statsmeta-balanced-noaug-nocrop
+```
+
 ## Submit
 
 From the repo root:
@@ -165,6 +173,12 @@ For the lower-variance stats-pooling head on the no-augmentation/no-crop input:
 
 ```bash
 sbatch scripts/pd_hand/run_item_3_4_fold0_accuracy_vjepa21_dense_stats_balanced_noaug_nocrop_wandb_ddp2.sbatch
+```
+
+For the stats-pooling head with manifest metadata (`side` and `dx`) on the no-augmentation/no-crop input:
+
+```bash
+sbatch scripts/pd_hand/run_item_3_4_fold0_accuracy_vjepa21_dense_statsmeta_balanced_noaug_nocrop_wandb_ddp2.sbatch
 ```
 
 ## Monitor
@@ -257,6 +271,16 @@ LOG_PREFIX=acc_vjepa21_dense_stats_balanced_noaug_nocrop_ddp2 \
 scripts/pd_hand/monitor_item_3_4_fold0.sh 28862039
 ```
 
+For the stats-pooling metadata balanced no-augmentation/no-crop run:
+
+```bash
+TAG=pd-hand-item-3_4-fold-0-acc-vjepa21-dense-statsmeta-balanced-noaug-nocrop \
+RUN_ROOT=/gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/vjepa2_evals/item_3_4/fold_0_accuracy_vjepa21_dense_statsmeta_balanced_noaug_nocrop_h100x2/video_classification_frozen/pd-hand-item-3_4-fold-0-acc-vjepa21-dense-statsmeta-balanced-noaug-nocrop \
+JOB_NAME=vjepa_i34_f0_stmnc21 \
+LOG_PREFIX=acc_vjepa21_dense_statsmeta_balanced_noaug_nocrop_ddp2 \
+scripts/pd_hand/monitor_item_3_4_fold0.sh <job_id>
+```
+
 ## Current Run State
 
 Historical note from May 19, 2026 21:19 EDT: job `28861909` was the active weighted CORN online run on `r818u35n11`. It resumed from epoch 3 and started epoch 4 with:
@@ -311,6 +335,7 @@ As of May 20, 2026 03:50 EDT, the active target is validation accuracy `>= 70%`.
 - No-MediaPipe-crop jobs `28862036` and `28862037` were stopped because they inherited the base no-augmentation W&B/config values through the shared runner. Dedicated no-crop job `28862038` is running on 2 H100s and confirmed `dataset_kwargs: {hand_crop: false}` plus W&B run id `pd-hand-item-3_4-fold-0-acc-vjepa21-dense-softmax-noaug-nocrop` in its startup log.
 - A stats-pooling probe head is implemented as `head_type: stats`. It pools frozen V-JEPA token features with mean/std/max and uses a small MLP, giving a lower-variance alternative to the single-query attentive probe for this small fold.
 - Stats-pooling balanced no-augmentation/no-crop job `28862039` is running on 2 H100s after stopping `28862033`.
+- A stats-pooling metadata variant is implemented for follow-up. It appends manifest metadata one-hots for `side` (`Left`, `Right`) and `dx` (`HC`, `NDC`, `PD`, `PPD`) to the mean/std/max pooled frozen-token vector. Fold 0 train has all six metadata categories; fold 0 validation lacks `PPD`, so that feature is always zero in validation.
 
 ## Learning Criteria
 

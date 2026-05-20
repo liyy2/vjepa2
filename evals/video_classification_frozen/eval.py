@@ -488,6 +488,7 @@ def run_one_epoch(
             ]
             clip_indices = [d.to(device, non_blocking=True) for d in data[2]]
             labels = data[1].to(device)
+            metadata_features = data[4].to(device, non_blocking=True) if len(data) > 4 else None
             batch_size = len(labels)
             batch_coverage = _batch_coverage(data[3]) if len(data) > 3 else {}
             for key, meter in coverage_meters.items():
@@ -498,9 +499,15 @@ def run_one_epoch(
             with torch.no_grad():
                 outputs = encoder(clips, clip_indices)
                 if not training:
-                    outputs = [[c(o) for o in outputs] for c in classifiers]
+                    outputs = [
+                        [_classifier_forward(c, o, metadata_features) for o in outputs]
+                        for c in classifiers
+                    ]
             if training:
-                outputs = [[c(o) for o in outputs] for c in classifiers]
+                outputs = [
+                    [_classifier_forward(c, o, metadata_features) for o in outputs]
+                    for c in classifiers
+                ]
 
         # Compute loss
         losses = [[criterion(o, labels) for o in coutputs] for coutputs in outputs]
@@ -611,6 +618,12 @@ def _build_classifier(head_type, embed_dim, num_heads, depth, num_classes, head_
         num_classes=num_classes,
         use_activation_checkpointing=True,
     )
+
+
+def _classifier_forward(classifier, tokens, metadata_features=None):
+    if metadata_features is not None and getattr(classifier, "metadata_dim", 0) > 0:
+        return classifier(tokens, metadata_features)
+    return classifier(tokens)
 
 
 def _init_wandb_logger(wandb_cfg, log_fields, args_eval, folder, eval_tag):

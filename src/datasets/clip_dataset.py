@@ -54,6 +54,8 @@ def make_clipdataset(
     hand_crop=True,
     crop_size=256,
     crop_scale=2.35,
+    metadata_columns=None,
+    metadata_categories=None,
 ):
     dataset = ClipDataset(
         data_paths=data_paths,
@@ -73,6 +75,8 @@ def make_clipdataset(
         hand_crop=hand_crop,
         crop_size=crop_size,
         crop_scale=crop_scale,
+        metadata_columns=metadata_columns,
+        metadata_categories=metadata_categories,
     )
 
     log_dir = pathlib.Path(log_dir) if log_dir else None
@@ -136,6 +140,8 @@ class ClipDataset(torch.utils.data.Dataset):
         hand_crop=True,
         crop_size=256,
         crop_scale=2.35,
+        metadata_columns=None,
+        metadata_categories=None,
     ):
         self.data_paths = [data_paths] if isinstance(data_paths, str) else list(data_paths)
         self.datasets_weights = datasets_weights
@@ -156,6 +162,8 @@ class ClipDataset(torch.utils.data.Dataset):
         self.hand_crop = hand_crop
         self.crop_size = int(crop_size)
         self.crop_scale = float(crop_scale)
+        self.metadata_columns = list(metadata_columns or [])
+        self.metadata_categories = metadata_categories or {}
 
         if sum(v is not None for v in (fps, duration, frame_step)) != 1:
             raise ValueError(
@@ -245,6 +253,8 @@ class ClipDataset(torch.utils.data.Dataset):
         if self.transform is not None:
             buffer = [self.transform(clip) for clip in buffer]
 
+        if getattr(self, "metadata_columns", []):
+            return buffer, label, clip_indices, coverage, self._metadata_features(metadata)
         return buffer, label, clip_indices, coverage
 
     def loadvideo_decord(self, sample, fpc):
@@ -323,6 +333,21 @@ class ClipDataset(torch.utils.data.Dataset):
         coverage = _frame_coverage(all_indices, total_frames=len(vr))
         buffer = vr.get_batch(all_indices).asnumpy()
         return buffer, clip_indices, coverage
+
+    def _metadata_features(self, metadata: dict[str, Any]) -> torch.Tensor:
+        features: list[float] = []
+        for column in getattr(self, "metadata_columns", []):
+            value = metadata.get(column, "")
+            categories = getattr(self, "metadata_categories", {}).get(column)
+            if categories is not None:
+                value = str(value)
+                features.extend([1.0 if value == str(category) else 0.0 for category in categories])
+            else:
+                try:
+                    features.append(float(value))
+                except (TypeError, ValueError):
+                    features.append(0.0)
+        return torch.tensor(features, dtype=torch.float32)
 
 
 def _has_skip_flag(flags: str) -> bool:
