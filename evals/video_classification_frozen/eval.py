@@ -326,6 +326,7 @@ def main(args_eval, resume_preempt=False):
             head_type=head_type,
             num_classes=num_classes,
             corn_pos_weight=corn_pos_weight,
+            selection_metric=selection_metric,
         )
         val_acc = val_result["acc"]
 
@@ -415,6 +416,7 @@ def run_one_epoch(
     head_type="softmax",
     num_classes=None,
     corn_pos_weight=None,
+    selection_metric=None,
 ):
 
     for c in classifiers:
@@ -527,7 +529,10 @@ def run_one_epoch(
                     num_classes=num_classes,
                 )
             )
-        best_idx = _best_metric_index(per_classifier, "quadratic_weighted_kappa")
+        best_idx = _best_metric_index(
+            per_classifier,
+            selection_metric or "quadratic_weighted_kappa",
+        )
         result.update(per_classifier[best_idx])
         result["best_classifier"] = int(best_idx)
         result["per_classifier"] = per_classifier

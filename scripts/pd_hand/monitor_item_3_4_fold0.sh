@@ -5,20 +5,22 @@ JOB_ID="${1:-}"
 TAG="${TAG:-pd-hand-item-3_4-fold-0}"
 RUN_ROOT="${RUN_ROOT:-/gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/vjepa2_evals/item_3_4/fold_0_ddp3_h100x3/video_classification_frozen/${TAG}}"
 RUN_LOG_DIR="${RUN_LOG_DIR:-/gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/vjepa2_evals/item_3_4/fold_0/run_logs}"
+JOB_NAME="${JOB_NAME:-vjepa_i34_f0_ddp3}"
+LOG_PREFIX="${LOG_PREFIX:-ddp3}"
 CONDA="${CONDA:-/gpfs/milgram/apps/avx2/software/miniconda/24.11.3/bin/conda}"
 CONDA_ENV="${CONDA_ENV:-video-llama}"
 
 if [[ -z "$JOB_ID" ]]; then
-  JOB_ID="$(squeue -u "${USER}" -h -n vjepa_i34_f0_ddp3 -o "%A" | head -n 1 || true)"
+  JOB_ID="$(squeue -u "${USER}" -h -n "$JOB_NAME" -o "%A" | head -n 1 || true)"
 fi
 
 if [[ -n "$JOB_ID" ]]; then
   echo "== squeue =="
   squeue -j "$JOB_ID" -o "%.18i %.8T %.10M %R" || true
-  OUT_FILE="${RUN_LOG_DIR}/ddp3_${JOB_ID}.out"
-  ERR_FILE="${RUN_LOG_DIR}/ddp3_${JOB_ID}.err"
+  OUT_FILE="${RUN_LOG_DIR}/${LOG_PREFIX}_${JOB_ID}.out"
+  ERR_FILE="${RUN_LOG_DIR}/${LOG_PREFIX}_${JOB_ID}.err"
 else
-  OUT_FILE="$(ls -t "${RUN_LOG_DIR}"/ddp3_*.out 2>/dev/null | head -n 1 || true)"
+  OUT_FILE="$(ls -t "${RUN_LOG_DIR}/${LOG_PREFIX}"_*.out 2>/dev/null | head -n 1 || true)"
   ERR_FILE="${OUT_FILE%.out}.err"
 fi
 

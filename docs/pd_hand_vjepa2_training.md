@@ -5,10 +5,13 @@ This runbook documents the one-fold PD hand-task probe run for `item_3_4` on V-J
 ## Files
 
 - Slurm submit script: `scripts/pd_hand/run_item_3_4_fold0_wandb_ddp3.sbatch`
+- Spearman-targeted Slurm script: `scripts/pd_hand/run_item_3_4_fold0_spearman_wandb_ddp3.sbatch`
 - W&B auth preflight: `scripts/pd_hand/prepare_wandb_auth.sh`
 - Monitor helper: `scripts/pd_hand/monitor_item_3_4_fold0.sh`
 - Repo-local config: `configs/eval_2_1/pd_hand_item_3_4_fold0_vjepa2_1_vitl_ssv2_corn.yaml`
+- Spearman-targeted config: `configs/eval_2_1/pd_hand_item_3_4_fold0_vjepa2_1_vitl_ssv2_corn_spearman.yaml`
 - Current output root: `/gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/vjepa2_evals/item_3_4/fold_0_ddp3_h100x3`
+- Spearman-targeted output root: `/gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/vjepa2_evals/item_3_4/fold_0_spearman_h100x3`
 - Current Slurm logs: `/gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/vjepa2_evals/item_3_4/fold_0/run_logs/`
 - Current external split CSVs: `/gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/splits/item_3_4/`
 
@@ -54,6 +57,12 @@ sbatch scripts/pd_hand/run_item_3_4_fold0_wandb_ddp3.sbatch
 
 The script requests one node with 3 H100s and resumes from `latest.pt` if present. It uses `WANDB_MODE=online`, does not export the key as `WANDB_API_KEY`, and lets W&B use verified `.netrc` auth.
 
+For a same-fold run that selects heads and checkpoints by Spearman instead of QWK:
+
+```bash
+sbatch scripts/pd_hand/run_item_3_4_fold0_spearman_wandb_ddp3.sbatch
+```
+
 ## Monitor
 
 ```bash
@@ -67,6 +76,16 @@ scripts/pd_hand/monitor_item_3_4_fold0.sh 28861909
 ```
 
 The monitor prints Slurm state, recent train/validation logs, W&B stderr lines, CSV rows, `metrics_latest.json`, confusion matrix, and coverage.
+
+For the Spearman-targeted run:
+
+```bash
+TAG=pd-hand-item-3_4-fold-0-spearman \
+RUN_ROOT=/gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/vjepa2_evals/item_3_4/fold_0_spearman_h100x3/video_classification_frozen/pd-hand-item-3_4-fold-0-spearman \
+JOB_NAME=vjepa_i34_f0_sp3 \
+LOG_PREFIX=spearman_ddp3 \
+scripts/pd_hand/monitor_item_3_4_fold0.sh <job_id>
+```
 
 ## Current Run State
 
@@ -108,6 +127,8 @@ Epoch 8 confusion matrix:
 ```
 
 This is not a finished result, but it is enough to conclude the run is learning some score separation: QWK is positive for four consecutive weighted epochs, QWK improves to `0.19581` by epoch 8, Spearman remains positive, MAE improves, and predictions are no longer a single column. Leave the job running to finish unless later epochs collapse back to QWK `0.0` with a single-column confusion matrix.
+
+As of May 19, 2026 21:37 EDT, the stricter active target is validation Spearman `>= 0.6`. The QWK-selected run has not reached that target; epoch 9 Spearman is `0.13228`. A Spearman-targeted follow-up config is available and uses `selection_metric: spearman`, W&B run id `pd-hand-item-3_4-fold-0-spearman`, and `num_epochs: 40`.
 
 ## Learning Criteria
 
