@@ -302,7 +302,7 @@ TAG=pd-hand-item-3_4-fold-0-acc-vjepa21-dense-statsmeta-eround-balanced-noaug-no
 RUN_ROOT=/gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/vjepa2_evals/item_3_4/fold_0_accuracy_vjepa21_dense_statsmeta_eround_balanced_noaug_nocrop_h100x2/video_classification_frozen/pd-hand-item-3_4-fold-0-acc-vjepa21-dense-statsmeta-eround-balanced-noaug-nocrop \
 JOB_NAME=vjepa_i34_f0_stmenc21 \
 LOG_PREFIX=acc_vjepa21_dense_statsmeta_eround_balanced_noaug_nocrop_ddp2 \
-scripts/pd_hand/monitor_item_3_4_fold0.sh <job_id>
+scripts/pd_hand/monitor_item_3_4_fold0.sh 28862042
 ```
 
 ## Current Run State
@@ -354,13 +354,15 @@ As of May 20, 2026 03:50 EDT, the active target is validation accuracy `>= 70%`.
 - Dense softmax comparison job `28862029` reached epoch 1 validation accuracy `30.30303` and was stopped.
 - Dense balanced-softmax comparison job `28862030` failed before the first batch due a weighted-loss autocast dtype mismatch; the loss was fixed and resubmitted as job `28862032`. Job `28862032` reached epoch 1 validation accuracy `30.30303`, stayed weak in epoch 2 training, and was stopped to free the GPU/QOS budget for the no-augmentation run.
 - Dense balanced-softmax no-smoothing comparison job `28862033` kept `class_weight: balanced` but removed label smoothing to test direct raw-accuracy optimization. Fold-0 train has no class-4 examples, so the auto class-4 training weight was `0.0`. Epoch 1 reached validation accuracy `36.36364`, Spearman `0.31613`, QWK `0.14544`, MAE `0.86364`, train coverage `0.93951/0.97561`, and val coverage `0.94125/0.98255`. It was stopped during epoch 2 because train accuracy stayed weak and the queued stats-pooling run needed GPUs.
-- Dense softmax no-augmentation comparison job `28862034` was stopped after the bf16 fix because it had started under the older fp16 autocast path. Replacement job `28862035` is running with 2 H100s because only two H100s were available under the current QOS limit. It keeps the dense 32-frame, stride-1, 12-segment coverage settings but disables training RandAugment and random erasing, and constrains random resized crop to `0.9-1.0` square crops.
+- Dense softmax no-augmentation comparison job `28862034` was stopped after the bf16 fix because it had started under the older fp16 autocast path.
+- Replacement dense softmax no-augmentation job `28862035` kept the dense 32-frame, stride-1, 12-segment coverage settings while disabling training RandAugment/random erasing and constraining random resized crop to `0.9-1.0` square crops. It reached epoch 1 validation accuracy `30.30303`, Spearman `0.11738`, QWK `0.0`, and MAE `0.78788`; it was stopped to free 2 H100s.
 - Future runs after the bf16 fix use true `torch.bfloat16` autocast in the video eval path. Earlier jobs used the existing video-eval behavior, where `use_bfloat16: true` actually selected fp16 autocast.
 - No-MediaPipe-crop jobs `28862036` and `28862037` were stopped because they inherited the base no-augmentation W&B/config values through the shared runner. Dedicated no-crop job `28862038` is running on 2 H100s and confirmed `dataset_kwargs: {hand_crop: false}` plus W&B run id `pd-hand-item-3_4-fold-0-acc-vjepa21-dense-softmax-noaug-nocrop` in its startup log.
 - A stats-pooling probe head is implemented as `head_type: stats`. It pools frozen V-JEPA token features with mean/std/max and uses a small MLP, giving a lower-variance alternative to the single-query attentive probe for this small fold.
 - Stats-pooling balanced no-augmentation/no-crop job `28862039` failed during validation after live code was patched under the running job; the dataset path is now backward-compatible for pre-patch `ClipDataset` instances.
 - Stats-pooling metadata job `28862041` is running on 2 H100s. It appends manifest metadata one-hots for `side` (`Left`, `Right`) and `dx` (`HC`, `NDC`, `PD`, `PPD`) to the mean/std/max pooled frozen-token vector. Fold 0 train has all six metadata categories; fold 0 validation lacks `PPD`, so that feature is always zero in validation. Startup confirmed W&B online logging and a `StatsPoolingClassifier` input width of `3078`.
 - Stats-pooling metadata epoch 1 reached validation accuracy `33.33333`, Spearman `0.49243`, QWK `0.0`, and MAE `0.96970`, but the selected classifier predicted every validation clip as class 2. The expected-round variant is intended to use the positive expected-score rank signal for raw-accuracy prediction instead of argmax.
+- Stats-pooling metadata expected-round job `28862042` is queued/running as the next attempt.
 
 ## Learning Criteria
 
