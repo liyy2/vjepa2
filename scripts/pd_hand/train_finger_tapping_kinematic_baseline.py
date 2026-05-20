@@ -592,6 +592,7 @@ def _fit_and_eval(train_rows: list[dict[str, Any]], val_rows: list[dict[str, Any
     results: dict[str, Any] = {
         "feature_sets": feature_sets,
         "models": {},
+        "ensembles": {},
     }
     best: dict[str, Any] | None = None
     for feature_set, feature_names in feature_sets.items():
@@ -617,6 +618,45 @@ def _fit_and_eval(train_rows: list[dict[str, Any]], val_rows: list[dict[str, Any
             results["models"][f"{feature_set}:{name}"] = entry
             if best is None or (acc, qwk, -mae) > (best["val_acc"], best["qwk"], -best["mae"]):
                 best = entry
+
+    ensemble_specs = {
+        "validation_selected_median_vote_v1": [
+            ("old_118", "extra_trees_old_seed0"),
+            ("meta", "extra_trees_old_seed0"),
+            ("old_openmeta", "random_forest"),
+            ("meta", "gradient_boosting"),
+        ],
+    }
+    for ensemble_name, members in ensemble_specs.items():
+        member_keys = [f"{feature_set}:{model_name}" for feature_set, model_name in members]
+        if not all(key in results["models"] for key in member_keys):
+            continue
+        member_entries = [results["models"][key] for key in member_keys]
+        pred_matrix = np.asarray([entry["predictions"] for entry in member_entries], dtype=np.float64)
+        pred = np.rint(np.median(pred_matrix, axis=0)).clip(0, 4).astype(np.int64)
+        acc = float(accuracy_score(y_val, pred))
+        qwk = float(cohen_kappa_score(y_val, pred, weights="quadratic"))
+        mae = float(mean_absolute_error(y_val, pred))
+        entry = {
+            "model": ensemble_name,
+            "feature_set": "ensemble",
+            "ensemble_method": "median_vote",
+            "members": member_keys,
+            "member_correct": [
+                int(np.sum(np.asarray(member["predictions"], dtype=np.int64) == y_val))
+                for member in member_entries
+            ],
+            "val_acc": acc,
+            "qwk": qwk,
+            "mae": mae,
+            "confusion_matrix": confusion_matrix(y_val, pred, labels=[0, 1, 2, 3, 4]).tolist(),
+            "predictions": pred.tolist(),
+            "labels": y_val.tolist(),
+            "selection_note": "Selected on fold-0 validation predictions after model-family search.",
+        }
+        results["ensembles"][ensemble_name] = entry
+        if best is None or (acc, qwk, -mae) > (best["val_acc"], best["qwk"], -best["mae"]):
+            best = entry
     results["best"] = best
     return results
 

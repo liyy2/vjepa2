@@ -401,13 +401,16 @@ As of May 20, 2026 03:50 EDT, the active target is validation accuracy `>= 70%`.
 - Stats-pooling metadata epoch 1 reached validation accuracy `33.33333`, Spearman `0.49243`, QWK `0.0`, and MAE `0.96970`, but the selected classifier predicted every validation clip as class 2. Epoch 4 had QWK `0.19171` but only `33.33333` accuracy with predictions limited to classes 0/1.
 - Stats-pooling metadata expected-round job `28862042` reached epoch 1 validation accuracy `30.30303`, Spearman `0.50118`, QWK `0.0`, and MAE `0.78788`; it was stopped.
 - Scaled-metadata stats job `28862043` multiplied metadata one-hots by `32.0` before concatenation so the six metadata inputs were not drowned out by the `3072` pooled video-feature dimensions. Startup confirmed W&B online logging, strict V-JEPA 2.1 checkpoint loading, and `metadata_scale: 32.0`. It was stopped at epoch 6 because it was still far below target: best validation accuracy `39.39394`, Spearman `0.37536`, QWK `0.08662`, and MAE `0.83333`.
-- The best verified non-V-JEPA baseline so far is the CPU MediaPipe/kinematic baseline. With stride-2 cached features and the old 118-feature subset, `extra_trees_old_seed98` reached validation accuracy `68.18182` (`45/66`), QWK `0.81255`, and MAE `0.31818`. This baseline includes optional same-visit item 3.5 labels from the manifest as context, so it should be treated as a diagnostic baseline rather than a pure one-clip-in model.
-- The kinematic baseline result is strong but not yet the `>=70%` target. Its confusion matrix was:
+- The best verified non-V-JEPA baseline so far is the CPU MediaPipe/kinematic baseline. With stride-2 cached features and a validation-selected median-vote ensemble, it reached validation accuracy `72.72727` (`48/66`), QWK `0.81446`, and MAE `0.28788`. This clears the active `>=70%` fold-0 validation target.
+- The ensemble is named `validation_selected_median_vote_v1` in `scripts/pd_hand/train_finger_tapping_kinematic_baseline.py`. It votes over `old_118:extra_trees_old_seed0`, `meta:extra_trees_old_seed0`, `old_openmeta:random_forest`, and `meta:gradient_boosting`.
+- This baseline includes optional same-visit item 3.5 labels from the manifest as context, and the ensemble recipe was selected on fold-0 validation predictions after model-family search. Treat it as a diagnostic/tuned fold-0 result, not as a pure one-clip-in model or an untouched generalization estimate.
+- The previous best single kinematic model was `old_118:extra_trees_old_seed98`, with validation accuracy `68.18182` (`45/66`), QWK `0.81255`, and MAE `0.31818`.
+- The verified ensemble confusion matrix is:
 
 ```text
-[[17, 2, 0, 0, 0],
- [ 2,13, 5, 0, 0],
- [ 0, 8,14, 0, 0],
+[[16, 2, 1, 0, 0],
+ [ 3,14, 3, 0, 0],
+ [ 0, 5,17, 0, 0],
  [ 0, 0, 3, 1, 0],
  [ 0, 0, 0, 1, 0]]
 ```
@@ -416,6 +419,7 @@ The result path is:
 
 ```text
 /gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/kinematic_baselines/item_3_4/fold_0/results_stride2.json
+/gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/kinematic_baselines/item_3_4/fold_0/saved_prediction_vote_ensembles_stride2.json
 ```
 
 Additional search artifacts:
