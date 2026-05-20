@@ -3,7 +3,7 @@
 #SBATCH --partition=gpu
 #SBATCH --nodes=1
 #SBATCH --ntasks=3
-#SBATCH --cpus-per-task=8
+#SBATCH --cpus-per-task=2
 #SBATCH --gres=gpu:h100:3
 #SBATCH --mem=360G
 #SBATCH --time=1-00:00:00
@@ -24,7 +24,7 @@ mkdir -p "$RUN_FOLDER"
 
 export PYTHONUNBUFFERED=1
 export CUDA_DEVICE_ORDER=PCI_BUS_ID
-export OMP_NUM_THREADS=4
+export OMP_NUM_THREADS=2
 export WANDB_MODE=online
 unset WANDB_API_KEY
 export MASTER_PORT=$((20000 + SLURM_JOB_ID % 40000))
@@ -53,7 +53,7 @@ export WANDB_DATA_DIR=/home/yl2428/.local/share/wandb
 mkdir -p "$XDG_CACHE_HOME" "$WANDB_CONFIG_DIR" "$WANDB_CACHE_DIR" "$WANDB_DATA_DIR"
 export PYTHONUNBUFFERED=1
 export CUDA_DEVICE_ORDER=PCI_BUS_ID
-export OMP_NUM_THREADS=4
+export OMP_NUM_THREADS=2
 export WANDB_MODE=online
 export WANDB_ENTITY=yl2428
 unset WANDB_API_KEY
