@@ -134,10 +134,11 @@ Epoch 8 confusion matrix:
 
 This is not a finished result, but it is enough to conclude the run is learning some score separation: QWK is positive for four consecutive weighted epochs, QWK improves to `0.19581` by epoch 8, Spearman remains positive, MAE improves, and predictions are no longer a single column. Leave the job running to finish unless later epochs collapse back to QWK `0.0` with a single-column confusion matrix.
 
-As of May 19, 2026 22:52 EDT, the stricter active target is validation Spearman `>= 0.6`.
+As of May 19, 2026 23:15 EDT, the stricter active target is validation Spearman `>= 0.6`.
 
-- QWK-selected job `28861909` is still running. The latest completed row is epoch 12: validation accuracy `42.42425`, Spearman `0.24286`, QWK `0.32423`, MAE `0.72727`, train coverage `54.8%/97.5%`, validation coverage `53.3%/97.8%`.
-- Spearman-targeted job `28861962` is still running. W&B launched successfully, the run entered epoch 1, and no validation row has completed yet. It uses `selection_metric: spearman`, W&B run id `pd-hand-item-3_4-fold-0-spearman`, and `num_epochs: 40`.
+- QWK-selected job `28861909` is still running. The latest completed row is epoch 13: validation accuracy `37.87879`, Spearman `0.24966`, QWK `0.30895`, MAE `0.80303`, train coverage `54.9%/97.6%`, validation coverage `53.3%/97.8%`.
+- Spearman-targeted job `28861962` is still running. The latest completed row is epoch 1: validation accuracy `33.33334`, Spearman `0.25802`, QWK `0.00000`, MAE `1.21212`, train coverage `54.7%/97.5%`, validation coverage `53.3%/97.8%`. W&B launched successfully, and the run uses `selection_metric: spearman`, W&B run id `pd-hand-item-3_4-fold-0-spearman`, and `num_epochs: 40`.
+- The Spearman-targeted epoch 1 confusion matrix still predicts all validation examples as class 0, so the positive Spearman is not enough evidence by itself; keep the run going and watch for prediction spread across adjacent score bins.
 
 ## Learning Criteria
 
