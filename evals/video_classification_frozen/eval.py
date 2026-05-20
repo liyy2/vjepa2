@@ -102,6 +102,7 @@ def main(args_eval, resume_preempt=False):
     normalization = args_data.get("normalization", None)
     train_transform_kwargs = args_data.get("train_transform_kwargs", None)
     val_transform_kwargs = args_data.get("val_transform_kwargs", None)
+    dataset_kwargs = args_data.get("dataset_kwargs", None)
     corn_pos_weight = None
     softmax_class_weight = None
     label_smoothing = 0.0
@@ -240,6 +241,7 @@ def main(args_eval, resume_preempt=False):
         num_workers=num_workers,
         normalization=normalization,
         transform_kwargs=train_transform_kwargs,
+        dataset_kwargs=dataset_kwargs,
     )
     val_loader, _ = make_dataloader(
         dataset_type=dataset_type,
@@ -258,6 +260,7 @@ def main(args_eval, resume_preempt=False):
         num_workers=num_workers,
         normalization=normalization,
         transform_kwargs=val_transform_kwargs,
+        dataset_kwargs=dataset_kwargs,
     )
     ipe = len(train_loader)
     logger.info(f"Dataloader created... iterations per epoch: {ipe}")
@@ -889,6 +892,7 @@ def make_dataloader(
     subset_file=None,
     normalization=None,
     transform_kwargs=None,
+    dataset_kwargs=None,
 ):
     if normalization is None:
         normalization = DEFAULT_NORMALIZATION
@@ -931,6 +935,7 @@ def make_dataloader(
         num_workers=num_workers,
         drop_last=False,
         subset_file=subset_file,
+        dataset_kwargs=dataset_kwargs,
     )
     return data_loader, data_sampler
 

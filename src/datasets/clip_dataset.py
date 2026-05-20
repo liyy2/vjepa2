@@ -51,6 +51,9 @@ def make_clipdataset(
     persistent_workers=True,
     deterministic=True,
     log_dir=None,
+    hand_crop=True,
+    crop_size=256,
+    crop_scale=2.35,
 ):
     dataset = ClipDataset(
         data_paths=data_paths,
@@ -67,6 +70,9 @@ def make_clipdataset(
         filter_long_videos=filter_long_videos,
         shared_transform=shared_transform,
         transform=transform,
+        hand_crop=hand_crop,
+        crop_size=crop_size,
+        crop_scale=crop_scale,
     )
 
     log_dir = pathlib.Path(log_dir) if log_dir else None

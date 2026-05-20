@@ -37,6 +37,7 @@ def init_data(
     persistent_workers=False,
     deterministic=True,
     log_dir=None,
+    dataset_kwargs=None,
 ):
     if data.lower() == "imagenet":
         from src.datasets.imagenet1k import make_imagenet1k
@@ -88,6 +89,7 @@ def init_data(
     elif data.lower() == "clipdataset":
         from src.datasets.clip_dataset import make_clipdataset
 
+        dataset_kwargs = dataset_kwargs or {}
         dataset, data_loader, dist_sampler = make_clipdataset(
             data_paths=root_path,
             batch_size=batch_size,
@@ -112,6 +114,7 @@ def init_data(
             rank=rank,
             deterministic=deterministic,
             log_dir=log_dir,
+            **dataset_kwargs,
         )
 
     return (data_loader, dist_sampler)
