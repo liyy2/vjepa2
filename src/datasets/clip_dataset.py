@@ -294,6 +294,15 @@ class ClipDataset(torch.utils.data.Dataset):
             warnings.warn(f"skipping video of length {len(vr)}")
             return [], None, None
 
+        # Guard pathological short videos. Without this, partition_len can be 0
+        # (when len(vr) < num_clips) and np.clip(..., 0, partition_len - 1) maps
+        # all indices to -1, leading to junk reads from get_batch.
+        if len(vr) < max(frame_step, self.num_clips):
+            warnings.warn(
+                f"skipping video of length {len(vr)} (frame_step={frame_step}, num_clips={self.num_clips})"
+            )
+            return [], None, None
+
         vr.seek(0)
         partition_len = len(vr) // self.num_clips
         all_indices, clip_indices = [], []

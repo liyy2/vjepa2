@@ -703,7 +703,10 @@ def _build_classifier(head_type, embed_dim, num_heads, depth, num_classes, head_
 
 
 def _classifier_forward(classifier, tokens, metadata_features=None):
-    if metadata_features is not None and getattr(classifier, "metadata_dim", 0) > 0:
+    # Unwrap DDP / FSDP so `metadata_dim` lookup hits the actual module, not
+    # the wrapper. Without this, DDP-wrapped heads silently lose metadata.
+    inner = getattr(classifier, "module", classifier)
+    if metadata_features is not None and getattr(inner, "metadata_dim", 0) > 0:
         return classifier(tokens, metadata_features)
     return classifier(tokens)
 

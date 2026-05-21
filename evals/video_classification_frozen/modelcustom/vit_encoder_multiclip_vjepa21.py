@@ -13,7 +13,7 @@ import torch.nn as nn
 import app.vjepa_2_1.models.vision_transformer as vit
 from app.vjepa_2_1.models.utils.pos_embs import get_1d_sincos_pos_embed
 from src.masks.utils import apply_masks
-from src.utils.lora import merge_lora_state_dict
+from src.utils.lora import merge_lora_state_dict, inject_lora
 
 logging.basicConfig()
 logger = logging.getLogger()
@@ -35,6 +35,11 @@ def init_module(
     enc_ckp_key = enc_kwargs.pop("checkpoint_key", "ema_encoder")
     enc_model_name = enc_kwargs.pop("model_name")
     strict_load = bool(enc_kwargs.pop("strict_state_dict", True))
+    # Optional fresh-LoRA injection for supervised fine-tuning. Set
+    # lora.enabled=true in model_kwargs.encoder to add LoRA adapters after
+    # loading the base checkpoint. The downstream fine-tune patterns
+    # ('lora_A', 'lora_B') will then have parameters to unfreeze.
+    lora_cfg = enc_kwargs.pop("lora", None)
 
     model = vit.__dict__[enc_model_name](
         img_size=resolution,
@@ -42,7 +47,20 @@ def init_module(
         **enc_kwargs,
     )
 
-    pretrained_dict = checkpoint_data[enc_ckp_key]
+    # Try the requested key, fall back to common aliases. JEPA-style training
+    # saves the EMA weights under "target_encoder"; eval defaults to
+    # "ema_encoder". Accept either.
+    fallback_keys = [enc_ckp_key, "ema_encoder", "target_encoder", "encoder"]
+    chosen_key = next((k for k in fallback_keys if k in checkpoint_data), None)
+    if chosen_key is None:
+        raise KeyError(
+            f"None of {fallback_keys} found in checkpoint; available keys: {list(checkpoint_data)}"
+        )
+    if chosen_key != enc_ckp_key:
+        logger.info(
+            f"checkpoint_key '{enc_ckp_key}' not present; using '{chosen_key}' instead"
+        )
+    pretrained_dict = checkpoint_data[chosen_key]
     pretrained_dict = {
         k.replace("module.", "").replace("backbone.", ""): v
         for k, v in pretrained_dict.items()
@@ -50,6 +68,22 @@ def init_module(
     pretrained_dict = merge_lora_state_dict(pretrained_dict)
     msg = model.load_state_dict(pretrained_dict, strict=strict_load)
     logger.info(f"loaded V-JEPA 2.1 encoder with msg: {msg}")
+
+    if lora_cfg and lora_cfg.get("enabled", False):
+        target_modules = lora_cfg.get("target_modules", ["attn.qkv", "attn.proj"])
+        rank = int(lora_cfg.get("rank", 8))
+        alpha = float(lora_cfg.get("alpha", 16))
+        dropout = float(lora_cfg.get("dropout", 0.05))
+        n_inj = inject_lora(
+            model,
+            target_modules=tuple(target_modules),
+            rank=rank,
+            alpha=alpha,
+            dropout=dropout,
+        )
+        logger.info(
+            f"injected LoRA: rank={rank} alpha={alpha} dropout={dropout} target={target_modules} -> {n_inj} modules"
+        )
     print(model)
 
     wrapper_kwargs = dict(wrapper_kwargs)

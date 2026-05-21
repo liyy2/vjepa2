@@ -314,8 +314,13 @@ def main(args, resume_preempt=False):
     load_path = None
     if load_model:
         if is_anneal:
-            if os.path.exists(latest_path) and resume_anneal:
+            # Auto-resume from latest.pth.tar if present (e.g. after a SLURM
+            # preemption). Otherwise fall back to the pretrained anneal_ckpt.
+            # `resume_anneal: true` also forces resume, kept for backward compat.
+            if os.path.exists(latest_path) and (resume_anneal or os.path.getsize(latest_path) > 0):
                 load_path = latest_path
+                resume_anneal = True
+                logger.info(f"anneal: resuming from existing latest checkpoint {latest_path}")
             else:
                 load_path = anneal_ckpt
                 resume_anneal = False
@@ -489,8 +494,11 @@ def main(args, resume_preempt=False):
 
     start_epoch = 0
     # -- load training checkpoint
-    print("Loadind checkpoint from: ", load_path)
-    if load_model or os.path.exists(latest_path):
+    print("Loading checkpoint from: ", load_path)
+    # Honor `load_checkpoint: false` even if a stale latest.pth.tar exists.
+    # Only load if we have a concrete path (load_model was true and the path
+    # resolved successfully above).
+    if load_model and load_path is not None:
         (
             encoder,
             predictor,

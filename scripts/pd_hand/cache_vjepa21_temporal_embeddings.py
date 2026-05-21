@@ -2,8 +2,7 @@
 """Cache pure-vision V-JEPA 2.1 temporal embeddings for PD hand clips.
 
 The cached tensor is a per-sample sequence of spatially pooled V-JEPA tubelet
-features.  It intentionally does not include side, dx, item 3.5 labels, or
-MediaPipe kinematic measurements.
+features. 
 """
 
 from __future__ import annotations
@@ -47,7 +46,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--hand-crop", action="store_true", help="Use ClipDataset visual hand crop preprocessing.")
     parser.add_argument("--crop-size", type=int, default=256, help="Min side length of the hand crop in pixels.")
     parser.add_argument("--crop-scale", type=float, default=2.35, help="Multiplier on hand-landmark radius for crop side length.")
-    parser.add_argument("--pool", choices=("mean", "mean_std"), default="mean")
+    parser.add_argument("--pool", choices=("mean", "mean_std", "max", "mean_max", "topk_mean"), default="mean")
+    parser.add_argument("--topk", type=int, default=16, help="K for topk_mean pool (top-K spatial tokens by L2 norm).")
     parser.add_argument("--force", action="store_true")
     return parser.parse_args()
 
@@ -114,9 +114,10 @@ def main() -> None:
             crop_size=args.crop_size,
             crop_scale=args.crop_scale,
             pool=args.pool,
+            topk=args.topk,
             device=device,
             config={"config": args.config, "split": split_name, "data": data_cfg, "pool": args.pool,
-                    "crop_size": args.crop_size, "crop_scale": args.crop_scale},
+                    "crop_size": args.crop_size, "crop_scale": args.crop_scale, "topk": args.topk},
         )
 
 
@@ -137,6 +138,7 @@ def cache_split(
     config: dict[str, Any],
     crop_size: int = 256,
     crop_scale: float = 2.35,
+    topk: int = 16,
 ) -> None:
     transform = make_transforms(
         training=False,
@@ -175,7 +177,7 @@ def cache_split(
             clip_indices = [indices.to(device, non_blocking=True) for indices in data[2]]
             with torch.cuda.amp.autocast(dtype=torch.bfloat16, enabled=device.type == "cuda"):
                 tokens = encoder(clips, clip_indices)[0].float()
-            seq = spatial_pool(tokens, spatial_tokens=spatial_tokens, pool=pool)
+            seq = spatial_pool(tokens, spatial_tokens=spatial_tokens, pool=pool, topk=topk)
             embeddings.append(seq.cpu().numpy().astype(np.float16))
             labels.append(data[1].cpu().numpy().astype(np.int64))
             coverage.extend(_batch_coverage_rows(data[3]))
@@ -196,7 +198,7 @@ def cache_split(
     print(f"wrote {out_path} x={x.shape} y={y.shape}")
 
 
-def spatial_pool(tokens: torch.Tensor, spatial_tokens: int, pool: str) -> torch.Tensor:
+def spatial_pool(tokens: torch.Tensor, spatial_tokens: int, pool: str, topk: int = 16) -> torch.Tensor:
     batch_size, num_tokens, embed_dim = tokens.shape
     if num_tokens % spatial_tokens != 0:
         raise ValueError(f"num_tokens={num_tokens} is not divisible by spatial_tokens={spatial_tokens}")
@@ -205,8 +207,23 @@ def spatial_pool(tokens: torch.Tensor, spatial_tokens: int, pool: str) -> torch.
     mean = x.mean(dim=2)
     if pool == "mean":
         return mean
-    std = x.std(dim=2, unbiased=False)
-    return torch.cat([mean, std], dim=-1)
+    if pool == "mean_std":
+        std = x.std(dim=2, unbiased=False)
+        return torch.cat([mean, std], dim=-1)
+    if pool == "max":
+        return x.max(dim=2).values
+    if pool == "mean_max":
+        mx = x.max(dim=2).values
+        return torch.cat([mean, mx], dim=-1)
+    if pool == "topk_mean":
+        # Pool the K spatial tokens with the largest L2 norm — implicit "where is signal" attention
+        norms = x.norm(dim=-1)  # [B, T, S]
+        k = min(int(topk), spatial_tokens)
+        _, idx = norms.topk(k=k, dim=2)  # [B, T, K]
+        idx_exp = idx.unsqueeze(-1).expand(-1, -1, -1, embed_dim)
+        top = torch.gather(x, dim=2, index=idx_exp)  # [B, T, K, D]
+        return top.mean(dim=2)
+    raise ValueError(f"unknown pool: {pool}")
 
 
 def _batch_coverage_rows(batch_coverage: Any) -> list[dict[str, float]]:

@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import random
 from dataclasses import asdict, dataclass, replace
@@ -398,6 +399,19 @@ def train_one_config(cfg, x_train, y_train, x_val, y_val, epochs, batch_size, de
         segment_length=cfg.segment_length, use_velocity=cfg.use_velocity,
     ).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+    # Linear warmup then constant. Cosine decay was tested but hurt — early-stop
+    # was triggering before LR finished decaying, effectively training at a
+    # shrinking LR most of the time. With this regime, warmup-then-hold gives
+    # the model a stable late-epoch fine-tuning phase.
+    steps_per_epoch = max(1, (len(train_ds) + batch_size - 1) // batch_size)
+    warmup_steps = max(1, (epochs // 20)) * steps_per_epoch  # ~5% warmup
+
+    def lr_at(step):
+        if step < warmup_steps:
+            return (step + 1) / warmup_steps
+        return 1.0
+
+    global_step = 0
 
     weights = ce_class_weights(y_train, mode=cfg.class_weight) if cfg.loss == "ce" else None
     if weights is not None:
@@ -414,6 +428,8 @@ def train_one_config(cfg, x_train, y_train, x_val, y_val, epochs, batch_size, de
     for epoch in range(1, epochs + 1):
         model.train()
         for xb, yb in train_loader:
+            for g in optimizer.param_groups:
+                g["lr"] = cfg.lr * lr_at(global_step)
             xb, yb = xb.to(device), yb.to(device)
             optimizer.zero_grad(set_to_none=True)
             if cfg.mixup_alpha > 0:
@@ -426,6 +442,7 @@ def train_one_config(cfg, x_train, y_train, x_val, y_val, epochs, batch_size, de
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
             optimizer.step()
+            global_step += 1
 
         model.eval()
         with torch.inference_mode():
