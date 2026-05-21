@@ -34,7 +34,7 @@ from src.datasets.data_manager import init_data
 from src.masks.multiseq_multiblock3d import MaskCollator
 from src.masks.utils import apply_masks
 from src.utils.distributed import init_distributed
-from src.utils.logging import AverageMeter, CSVLogger, get_logger, gpu_timer
+from src.utils.logging import AverageMeter, CSVLogger, WandBLogger, get_logger, gpu_timer
 from torch.nn.parallel import DistributedDataParallel
 
 
@@ -69,6 +69,7 @@ def main(args, resume_preempt=False):
     skip_batches = cfgs_meta.get("skip_batches", -1)
     use_sdpa = cfgs_meta.get("use_sdpa", False)
     sync_gc = cfgs_meta.get("sync_gc", False)
+    args_wandb = args.get("wandb", {}) or {}
     logger.info(f"LD_PRELOAD: {os.environ.get('LD_PRELOAD')}")
     which_dtype = cfgs_meta.get("dtype")
     logger.info(f"{which_dtype=}")
@@ -114,6 +115,7 @@ def main(args, resume_preempt=False):
     normalize_predictor = cfgs_model.get("normalize_predictor", False)
     modality_embedding = cfgs_model.get("modality_embedding", False)
     levels_predictor = cfgs_model.get("levels_predictor", 4)
+    lora_kwargs = cfgs_model.get("lora", None)
     if model_name == "vit_large":
         embed_dim_encoder = 1024
     elif model_name == "vit_giant_xformers":
@@ -133,11 +135,17 @@ def main(args, resume_preempt=False):
     batch_size = cfgs_data.get("batch_size")
     tubelet_size = cfgs_data.get("tubelet_size")
     fps = cfgs_data.get("fps")
+    frame_step = cfgs_data.get("frame_step", None)
+    num_clips = cfgs_data.get("num_clips", cfgs_data.get("num_segments", 1))
+    random_clip_sampling = cfgs_data.get("random_clip_sampling", True)
+    allow_clip_overlap = cfgs_data.get("allow_clip_overlap", False)
     crop_size = cfgs_data.get("crop_size", 224)
     patch_size = cfgs_data.get("patch_size")
     grid_size = crop_size // patch_size
     pin_mem = cfgs_data.get("pin_mem", False)
     num_workers = cfgs_data.get("num_workers", 1)
+    persistent_workers = cfgs_data.get("persistent_workers", True)
+    dataset_kwargs = cfgs_data.get("dataset_kwargs", None)
 
     # -- IMG DATA
     cfgs_img_data = args.get("img_data")
@@ -161,6 +169,7 @@ def main(args, resume_preempt=False):
     motion_shift = cfgs_data_aug.get("motion_shift", False)
     reprob = cfgs_data_aug.get("reprob", 0.0)
     use_aa = cfgs_data_aug.get("auto_augment", False)
+    random_horizontal_flip = cfgs_data_aug.get("random_horizontal_flip", True)
 
     # -- LOSS
     cfgs_loss = args.get("loss")
@@ -279,6 +288,8 @@ def main(args, resume_preempt=False):
             f"dataset_paths: {dataset_paths}, "
             f"datasets_weights: {datasets_weights}, "
             f"dataset_fpcs: {dataset_fpcs}, "
+            f"frame_step: {frame_step}, "
+            f"fps: {fps}, "
             f"batch_size: {batch_size}, "
             f"num_workers: {num_workers}, "
             f"data_rank: {data_rank}, "
@@ -324,6 +335,24 @@ def main(args, resume_preempt=False):
         ("%d", "gpu-time(ms)"),
         ("%d", "dataload-time(ms)"),
     )
+    wandb_logger = None
+    if rank == 0:
+        wandb_logger = _init_wandb_logger(
+            args_wandb,
+            (
+                ("%d", "epoch"),
+                ("%d", "itr"),
+                ("%.5f", "loss"),
+                ("%.8f", "lr"),
+                ("%.8f", "weight_decay"),
+                ("%.3f", "memory_mb"),
+                ("%d", "iter_time_ms"),
+                ("%d", "gpu_time_ms"),
+                ("%d", "dataload_time_ms"),
+            ),
+            args,
+            folder,
+        )
 
     # -- init model
     encoder, predictor = init_video_model(
@@ -357,6 +386,7 @@ def main(args, resume_preempt=False):
         has_cls_first=has_cls_first,
         interpolate_rope=interpolate_rope,
         modality_embedding=modality_embedding,
+        lora_kwargs=lora_kwargs,
     )
     target_encoder = copy.deepcopy(encoder)
 
@@ -376,7 +406,7 @@ def main(args, resume_preempt=False):
     )
 
     transform = make_transforms(
-        random_horizontal_flip=True,
+        random_horizontal_flip=random_horizontal_flip,
         random_resize_aspect_ratio=ar_range,
         random_resize_scale=rr_scale,
         reprob=reprob,
@@ -394,13 +424,19 @@ def main(args, resume_preempt=False):
         # clip_len=clip_len,
         dataset_fpcs=dataset_fpcs,
         fps=fps,
+        frame_sample_rate=frame_step,
+        num_clips=num_clips,
+        random_clip_sampling=random_clip_sampling,
+        allow_clip_overlap=allow_clip_overlap,
         transform=transform,
         rank=data_rank,
         world_size=data_world_size,
         datasets_weights=datasets_weights,
+        dataset_kwargs=dataset_kwargs,
         collator=mask_collator,
         num_workers=num_workers,
         pin_mem=pin_mem,
+        persistent_workers=persistent_workers,
         log_dir=None,
     )
     try:
@@ -518,6 +554,15 @@ def main(args, resume_preempt=False):
         gc.disable()
         gc.collect()
 
+    def collated_fpc(udata):
+        for value in reversed(udata):
+            if not isinstance(value, (list, tuple)) or len(value) == 0:
+                continue
+            candidate = value[-1]
+            if hasattr(candidate, "size") and len(candidate.size()) >= 2:
+                return candidate.size(0), candidate.size(1)
+        raise ValueError("Could not infer frames-per-clip from collated batch")
+
     trailing_losses = []
     step_count = 0
 
@@ -561,20 +606,22 @@ def main(args, resume_preempt=False):
                         ) from e
 
             for _fpc_sample in sample:
-                bs, fpc = _fpc_sample[0][-1][0].size()
+                bs, fpc = collated_fpc(_fpc_sample[0])
                 mask_meters[fpc].update(bs / batch_size)
 
             def load_clips():
                 all_clips, all_masks_enc, all_masks_pred = [], [], []
                 for fpc_sample in sample:
                     udata, masks_enc, masks_pred = fpc_sample
-                    all_clips += [udata[0][0].to(device, non_blocking=True)]
-                    all_masks_enc += [
-                        [m.to(device, non_blocking=True) for m in masks_enc]
-                    ]
-                    all_masks_pred += [
-                        [m.to(device, non_blocking=True) for m in masks_pred]
-                    ]
+                    clip_batches = udata[0] if isinstance(udata[0], (list, tuple)) else [udata[0]]
+                    for clip_batch in clip_batches:
+                        all_clips += [clip_batch.to(device, non_blocking=True)]
+                        all_masks_enc += [
+                            [m.to(device, non_blocking=True) for m in masks_enc]
+                        ]
+                        all_masks_pred += [
+                            [m.to(device, non_blocking=True) for m in masks_pred]
+                        ]
                 return all_clips, all_masks_enc, all_masks_pred
 
             clips, masks_enc, masks_pred = load_clips()
@@ -787,6 +834,18 @@ def main(args, resume_preempt=False):
                     gpu_etime_ms,
                     data_elapsed_time_ms,
                 )
+                if rank == 0 and wandb_logger is not None:
+                    wandb_logger.log(
+                        epoch + 1,
+                        itr,
+                        loss,
+                        _new_lr,
+                        _new_wd,
+                        torch.cuda.max_memory_allocated() / 1024.0**2,
+                        iter_elapsed_time_ms,
+                        gpu_etime_ms,
+                        data_elapsed_time_ms,
+                    )
                 if (
                     (itr % log_freq == 0)
                     or (itr == ipe - 1)
@@ -833,3 +892,32 @@ def main(args, resume_preempt=False):
                 save_every_file = f"e{epoch}.pth.tar"
                 save_every_path = os.path.join(folder, save_every_file)
                 save_checkpoint(epoch + 1, save_every_path)
+
+    if rank == 0 and wandb_logger is not None:
+        wandb_logger.finish()
+
+
+def _init_wandb_logger(wandb_cfg, log_fields, args, folder):
+    if not wandb_cfg.get("enabled", False):
+        return None
+    wandb_dir = wandb_cfg.get("dir", folder)
+    os.makedirs(wandb_dir, exist_ok=True)
+    name = wandb_cfg.get("name") or os.path.basename(folder.rstrip(os.sep))
+    project = wandb_cfg.get("project", "vjepa2")
+    logger.info(f"Initializing wandb logger project={project} name={name}")
+    return WandBLogger(
+        *log_fields,
+        enabled=True,
+        project=project,
+        entity=wandb_cfg.get("entity"),
+        name=name,
+        group=wandb_cfg.get("group"),
+        tags=wandb_cfg.get("tags"),
+        notes=wandb_cfg.get("notes"),
+        mode=wandb_cfg.get("mode"),
+        dir=wandb_dir,
+        resume=wandb_cfg.get("resume"),
+        id=wandb_cfg.get("id"),
+        job_type=wandb_cfg.get("job_type", "vjepa_2_1_lora_adapt"),
+        config=wandb_cfg.get("config", args),
+    )

@@ -22,6 +22,8 @@ This runbook documents the one-fold PD hand-task probe run for `item_3_4` on V-J
 - W&B auth preflight: `scripts/pd_hand/prepare_wandb_auth.sh`
 - Monitor helper: `scripts/pd_hand/monitor_item_3_4_fold0.sh`
 - V-JEPA 2.1 multiclip wrapper: `evals/video_classification_frozen/modelcustom/vit_encoder_multiclip_vjepa21.py`
+- Trainable V-JEPA 2.1 encoder support: `evals/video_classification_frozen/models.py`, `evals/video_classification_frozen/eval.py`
+- Temporal stats pure-vision head: `src/heads/stats_head.py`
 - Repo-local config: `configs/eval_2_1/pd_hand_item_3_4_fold0_vjepa2_1_vitl_ssv2_corn.yaml`
 - Spearman-targeted config: `configs/eval_2_1/pd_hand_item_3_4_fold0_vjepa2_1_vitl_ssv2_corn_spearman.yaml`
 - Accuracy-targeted dense config: `configs/eval_2_1/pd_hand_item_3_4_fold0_vjepa2_1_vitl384_corn_accuracy_dense.yaml`
@@ -34,6 +36,10 @@ This runbook documents the one-fold PD hand-task probe run for `item_3_4` on V-J
 - Accuracy-targeted dense stats-head metadata balanced no-augmentation/no-MediaPipe-crop config: `configs/eval_2_1/pd_hand_item_3_4_fold0_vjepa2_1_vitl384_statsmeta_balanced_noaug_nocrop_accuracy_dense.yaml`
 - Accuracy-targeted dense stats-head metadata expected-round no-augmentation/no-MediaPipe-crop config: `configs/eval_2_1/pd_hand_item_3_4_fold0_vjepa2_1_vitl384_statsmeta_eround_balanced_noaug_nocrop_accuracy_dense.yaml`
 - Accuracy-targeted dense stats-head scaled-metadata no-augmentation/no-MediaPipe-crop config: `configs/eval_2_1/pd_hand_item_3_4_fold0_vjepa2_1_vitl384_statsmeta_scaled_noaug_nocrop_accuracy_dense.yaml`
+- Trainable last-block stats-head no-crop config: `configs/eval_2_1/pd_hand_item_3_4_fold0_vjepa2_1_vitl384_stats_nocrop_lastblock_ft_12seg_b2.yaml`
+- Trainable last-block temporal-stats no-crop config: `configs/eval_2_1/pd_hand_item_3_4_fold0_vjepa2_1_vitl384_temporalstats_nocrop_lastblock_ft_12seg_b2.yaml`
+- Trainable last-block temporal-stats balanced no-crop config: `configs/eval_2_1/pd_hand_item_3_4_fold0_vjepa2_1_vitl384_temporalstats_balanced_nocrop_lastblock_ft_12seg_b2.yaml`
+- Trainable last-4-block temporal-stats no-crop config: `configs/eval_2_1/pd_hand_item_3_4_fold0_vjepa2_1_vitl384_temporalstats_nocrop_last4_ft_12seg_b1.yaml`
 - Current output root: `/gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/vjepa2_evals/item_3_4/fold_0_ddp3_h100x3`
 - Spearman-targeted output root: `/gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/vjepa2_evals/item_3_4/fold_0_spearman_h100x3`
 - Accuracy-targeted dense output root: `/gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/vjepa2_evals/item_3_4/fold_0_accuracy_vjepa21_dense_h100x3`
@@ -289,6 +295,80 @@ Observed fold-0 validation results from frozen V-JEPA 2.1 cached embeddings:
 | cross-run probability ensemble | 57.6% | 38/66 | Validation-selected ensemble across saved pure-vision heads |
 
 The target `> 70%` requires at least `47/66` on this validation split. These frozen V-JEPA 2.1 cached-feature runs did not reach that target.
+
+## Trainable Pure-Vision V-JEPA 2.1 Runs
+
+The video eval path now supports opt-in encoder fine-tuning:
+
+```yaml
+experiment:
+  optimization:
+    finetune_encoder: true
+    encoder_trainable_blocks: 1
+    encoder_trainable_patterns:
+    - model.norm
+    - model.fc_norm
+    encoder_lr: 0.000003
+```
+
+Defaults remain frozen. When fine-tuning is enabled, the training loop wraps the encoder in DDP, includes trainable encoder parameters in AdamW, removes `torch.no_grad()` only for the trainable training forward, and saves only trainable encoder weights in checkpoints.
+
+The new `head_type: temporal_stats` is a pure-vision head. It reshapes V-JEPA tokens into `T x spatial_tokens`, spatially pools each tubelet, then applies the same temporal summary pattern used by the cached V-JEPA temporal-encoder sweep.
+
+Local 4-H100 tests on May 20, 2026 used:
+
+```bash
+OMP_NUM_THREADS=2 /home/yl2428/.conda/envs/video-llama/bin/python -m torch.distributed.run \
+  --nproc_per_node=4 --master_port=<port> \
+  -m evals.main --debugmode true --use_fsdp \
+  --devices cuda:0 cuda:1 cuda:2 cuda:3 \
+  --fname <config>
+```
+
+Observed pure-vision trainable results so far:
+
+| Config | Trainable encoder | Batch/GPU | Best val accuracy | Coverage | Notes |
+| --- | --- | ---: | ---: | --- | --- |
+| `stats_nocrop_lastblock_ft_4seg` | last block | 1 | 28.8% | 43.8% / 100.0% | Smoke run; low raw-frame coverage |
+| `stats_nocrop_lastblock_ft_12seg_b2` | last block | 2 | 34.4% | 94.0% / 98.3% | Collapsed to class 2 |
+| `temporalstats_nocrop_lastblock_ft_12seg_b2` | last block | 2 | 34.4% | 94.0% / 98.3% | Collapsed to class 2 then class 1 |
+| `temporalstats_balanced_nocrop_lastblock_ft_12seg_b2` | last block | 2 | 34.4% | 94.0% / 98.3% | Balanced loss shifted collapse across classes |
+| `temporalstats_nocrop_last4_ft_12seg_b1` | last 4 blocks | 1 | 30.9% | 93.9% / 98.2% | 50.4M trainable params; still collapsed |
+
+Memory was not the limiter: last-block 12-segment batch-2 used about `18.8 GB` per H100, and last-4-block 12-segment batch-1 used about `24.3 GB` per H100. These runs did not reach the pure-vision `>=70%` target.
+
+## V-JEPA 2.1 LoRA JEPA Adaptation
+
+The domain-adaptive JEPA path now supports LoRA in the V-JEPA 2.1 encoder. The first implementation injects LoRA into encoder attention `attn.qkv` and `attn.proj` linears, freezes the base encoder, keeps the JEPA predictor trainable, and copies the LoRA-equipped encoder into the EMA target encoder. This is the intended first pure-vision adaptation experiment because it learns from PD hand-task clips without optimizing the small/noisy 0-4 labels.
+
+Implementation files:
+
+- `src/utils/lora.py`
+- `app/vjepa_2_1/utils.py`
+- `app/vjepa_2_1/train.py`
+- `evals/video_classification_frozen/modelcustom/vit_encoder_multiclip_vjepa21.py`
+
+Training config:
+
+```bash
+configs/train_2_1/pd_hand/vitl384-lora-jepa-adapt-32f-step1-fold0.yaml
+```
+
+Slurm run:
+
+```bash
+sbatch scripts/pd_hand/run_item_3_4_fold0_vjepa21_lora_jepa_adapt_wandb_ddp4.sbatch
+```
+
+Interactive 4-H100 run:
+
+```bash
+salloc --partition=gpu --nodes=1 --ntasks=4 --gres=gpu:h100:4 \
+  --cpus-per-task=8 --mem=320G --time=12:00:00
+bash scripts/pd_hand/run_item_3_4_fold0_vjepa21_lora_jepa_adapt_wandb_ddp4.sbatch
+```
+
+The LoRA config uses only `fold_0_train.csv` for JEPA adaptation. Do not adapt on `fold_0_val.csv` unless explicitly reporting a transductive/leaky experiment. The saved LoRA checkpoint can be evaluated with the existing V-JEPA 2.1 frozen wrapper because LoRA weights are merged into normal Linear weights at load time.
 
 ## Monitor
 

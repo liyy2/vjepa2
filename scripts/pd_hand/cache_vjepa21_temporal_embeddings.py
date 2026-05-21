@@ -45,6 +45,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-workers", type=int, default=2)
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--hand-crop", action="store_true", help="Use ClipDataset visual hand crop preprocessing.")
+    parser.add_argument("--crop-size", type=int, default=256, help="Min side length of the hand crop in pixels.")
+    parser.add_argument("--crop-scale", type=float, default=2.35, help="Multiplier on hand-landmark radius for crop side length.")
     parser.add_argument("--pool", choices=("mean", "mean_std"), default="mean")
     parser.add_argument("--force", action="store_true")
     return parser.parse_args()
@@ -85,10 +87,13 @@ def main() -> None:
         splits.append(("val", data_cfg["dataset_val"]))
 
     for split_name, csv_path in splits:
+        crop_tag = ""
+        if args.hand_crop:
+            crop_tag = f"_cs{args.crop_size}_sc{args.crop_scale:g}"
         suffix = (
             f"vjepa21_vitl384_{split_name}_"
             f"{frames_per_clip}f_step{frame_step}_{num_segments}seg_"
-            f"{'handcrop' if args.hand_crop else 'nocrop'}_{args.pool}.npz"
+            f"{'handcrop' if args.hand_crop else 'nocrop'}{crop_tag}_{args.pool}.npz"
         )
         out_path = out_dir / suffix
         if out_path.exists() and not args.force:
@@ -106,9 +111,12 @@ def main() -> None:
             resolution=resolution,
             spatial_tokens=spatial_tokens,
             hand_crop=args.hand_crop,
+            crop_size=args.crop_size,
+            crop_scale=args.crop_scale,
             pool=args.pool,
             device=device,
-            config={"config": args.config, "split": split_name, "data": data_cfg, "pool": args.pool},
+            config={"config": args.config, "split": split_name, "data": data_cfg, "pool": args.pool,
+                    "crop_size": args.crop_size, "crop_scale": args.crop_scale},
         )
 
 
@@ -127,6 +135,8 @@ def cache_split(
     pool: str,
     device: torch.device,
     config: dict[str, Any],
+    crop_size: int = 256,
+    crop_scale: float = 2.35,
 ) -> None:
     transform = make_transforms(
         training=False,
@@ -149,6 +159,8 @@ def cache_split(
         rank=0,
         drop_last=False,
         hand_crop=hand_crop,
+        crop_size=crop_size,
+        crop_scale=crop_scale,
     )
 
     embeddings: list[np.ndarray] = []

@@ -13,6 +13,7 @@ import torch.nn as nn
 import app.vjepa_2_1.models.vision_transformer as vit
 from app.vjepa_2_1.models.utils.pos_embs import get_1d_sincos_pos_embed
 from src.masks.utils import apply_masks
+from src.utils.lora import merge_lora_state_dict
 
 logging.basicConfig()
 logger = logging.getLogger()
@@ -46,13 +47,27 @@ def init_module(
         k.replace("module.", "").replace("backbone.", ""): v
         for k, v in pretrained_dict.items()
     }
+    pretrained_dict = merge_lora_state_dict(pretrained_dict)
     msg = model.load_state_dict(pretrained_dict, strict=strict_load)
     logger.info(f"loaded V-JEPA 2.1 encoder with msg: {msg}")
     print(model)
 
+    wrapper_kwargs = dict(wrapper_kwargs)
+    return_hierarchical = bool(wrapper_kwargs.pop("return_hierarchical", False))
+    output_dim = model.embed_dim
+    if return_hierarchical:
+        model.return_hierarchical = True
+        output_dim = model.embed_dim * len(model.out_layers_distillation)
+        logger.info(
+            "using V-JEPA 2.1 hierarchical output layers %s; output dim %s",
+            model.out_layers_distillation,
+            output_dim,
+        )
+
     model = ClipAggregation(
         model,
         tubelet_size=model.tubelet_size,
+        output_dim=output_dim,
         **wrapper_kwargs,
     )
     del checkpoint_data
@@ -66,13 +81,14 @@ class ClipAggregation(nn.Module):
         self,
         model,
         tubelet_size=2,
+        output_dim=None,
         max_frames=128,
         use_pos_embed=False,
     ):
         super().__init__()
         self.model = model
         self.tubelet_size = tubelet_size
-        self.embed_dim = embed_dim = model.embed_dim
+        self.embed_dim = embed_dim = int(output_dim or model.embed_dim)
         self.num_heads = model.num_heads
         self._warned_dynamic_pos_embed = False
 

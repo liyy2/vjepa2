@@ -238,6 +238,7 @@ class ClipDataset(torch.utils.data.Dataset):
         buffer, clip_indices, coverage = self.loadvideo_decord(sample, frames_per_clip)
         if len(buffer) == 0:
             return
+        coverage["sample_index"] = int(index)
 
         side = str(metadata.get(self.side_col, "") or "")
         if self.hand_crop:
@@ -407,15 +408,20 @@ def _mediapipe_hand_bbox(
     except Exception:
         return None
 
-    target_side = side.capitalize()
+    # MediaPipe handedness is from the camera's perspective; the manifest's
+    # `side` is from the patient's perspective. They are mirror images, so
+    # swap when comparing.
+    _SIDE_TO_MEDIAPIPE = {"Left": "Right", "Right": "Left"}
+    target_side = _SIDE_TO_MEDIAPIPE.get(side.capitalize(), side.capitalize())
     hands = mp.solutions.hands.Hands(
         static_image_mode=False,
         max_num_hands=2,
         min_detection_confidence=0.35,
         min_tracking_confidence=0.35,
     )
-    xs: list[float] = []
-    ys: list[float] = []
+    wrist_xs: list[float] = []
+    wrist_ys: list[float] = []
+    radii: list[float] = []
     try:
         stride = max(1, len(buffer) // 12)
         for frame in buffer[::stride]:
@@ -442,29 +448,28 @@ def _mediapipe_hand_bbox(
                     break
             if chosen is None:
                 chosen = candidates[0]
-            _, wrist, radius, points = chosen
-            half = max(crop_size / 2.0, radius * crop_scale)
-            xs.extend([wrist[0] - half, wrist[0] + half, points[:, 0].min(), points[:, 0].max()])
-            ys.extend([wrist[1] - half, wrist[1] + half, points[:, 1].min(), points[:, 1].max()])
+            _, wrist, radius, _ = chosen
+            wrist_xs.append(float(wrist[0]))
+            wrist_ys.append(float(wrist[1]))
+            radii.append(float(radius))
     finally:
         hands.close()
 
-    if not xs or not ys:
+    if not wrist_xs:
         return None
-    x1 = math.floor(min(xs))
-    x2 = math.ceil(max(xs))
-    y1 = math.floor(min(ys))
-    y2 = math.ceil(max(ys))
-    width = x2 - x1
-    height = y2 - y1
-    side_len = max(crop_size, width, height)
-    cx = (x1 + x2) / 2.0
-    cy = (y1 + y2) / 2.0
+    # Stationary crop: center on the MEDIAN wrist position (robust to outliers),
+    # side length = max(crop_size, median_radius * crop_scale * 2).
+    # This produces a tight, hand-centered crop that doesn't expand with motion.
+    cx = float(np.median(wrist_xs))
+    cy = float(np.median(wrist_ys))
+    r_med = float(np.median(radii))
+    side_len = max(float(crop_size), r_med * crop_scale * 2.0)
+    half = side_len / 2.0
     return (
-        int(round(cx - side_len / 2.0)),
-        int(round(cy - side_len / 2.0)),
-        int(round(cx + side_len / 2.0)),
-        int(round(cy + side_len / 2.0)),
+        int(round(cx - half)),
+        int(round(cy - half)),
+        int(round(cx + half)),
+        int(round(cy + half)),
     )
 
 

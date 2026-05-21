@@ -53,21 +53,12 @@ class MaskCollator(object):
 
     def __call__(self, batch):
 
-        # Batch: [buffer, label, clip_indices] for video
+        # Batch: [buffer, label, clip_indices] for video. ClipDataset may append
+        # coverage/metadata after clip_indices, so do not assume it is last.
         # or [buffer, label] for images
         filtered_batches = {fpc: [] for fpc in self.mask_generators}
         for sample in batch:
-            # Check if sample is from video dataset (has clip_indices) or image dataset
-            if len(sample) >= 3 and isinstance(sample[-1], (list, tuple)):
-                # Video sample: sample[-1] is clip_indices, sample[-1][-1] contains frame indices
-                try:
-                    fpc = len(sample[-1][-1])
-                except (TypeError, IndexError):
-                    # Fallback: assume single frame if structure is unexpected
-                    fpc = 1
-            else:
-                # Image sample: single frame
-                fpc = 1
+            fpc = _sample_fpc(sample)
             if fpc in filtered_batches:
                 filtered_batches[fpc] += [sample]
 
@@ -88,6 +79,17 @@ class MaskCollator(object):
             ]
 
         return fpc_collations
+
+
+def _sample_fpc(sample):
+    for value in reversed(sample):
+        if not isinstance(value, (list, tuple)) or len(value) == 0:
+            continue
+        try:
+            return len(value[-1])
+        except (TypeError, IndexError):
+            continue
+    return 1
 
 
 class _MaskGenerator(object):

@@ -31,7 +31,11 @@ from torch.nn.parallel import DistributedDataParallel
 from evals.video_classification_frozen.models import init_module
 from evals.video_classification_frozen.utils import make_transforms
 from src.heads.corn_head import CORNAttentiveClassifier
-from src.heads.stats_head import StatsPoolingClassifier
+from src.heads.stats_head import (
+    StatsPoolingClassifier,
+    TemporalStatsPoolingClassifier,
+    TemporalTransformerClassifier,
+)
 from src.datasets.data_manager import init_data
 from src.losses.corn_loss import corn_expected_score, corn_loss
 from src.models.attentive_pooler import AttentiveClassifier
@@ -145,6 +149,23 @@ def main(args_eval, resume_preempt=False):
         )
         for kwargs in args_opt.get("multihead_kwargs")
     ]
+    finetune_encoder = bool(args_opt.get("finetune_encoder", False))
+    encoder_trainable_blocks = int(args_opt.get("encoder_trainable_blocks", 0) or 0)
+    encoder_trainable_patterns = args_opt.get("encoder_trainable_patterns", []) or []
+    encoder_opt_kwargs = None
+    if finetune_encoder:
+        if len(opt_kwargs) != 1:
+            raise ValueError("finetune_encoder=true currently supports exactly one classifier/optimizer head.")
+        encoder_lr = float(args_opt.get("encoder_lr", 1.0e-5))
+        encoder_wd = float(args_opt.get("encoder_weight_decay", 0.01))
+        encoder_opt_kwargs = dict(
+            ref_wd=encoder_wd,
+            final_wd=float(args_opt.get("encoder_final_weight_decay", encoder_wd)),
+            start_lr=float(args_opt.get("encoder_start_lr", encoder_lr)),
+            ref_lr=encoder_lr,
+            final_lr=float(args_opt.get("encoder_final_lr", 0.0)),
+            warmup=float(args_opt.get("encoder_warmup", 0.0) or 0.0),
+        )
     # ----------------------------------------------------------------------- #
 
     try:
@@ -173,7 +194,7 @@ def main(args_eval, resume_preempt=False):
     metrics_path = os.path.join(folder, "metrics_latest.json")
 
     # -- make loggers
-    if head_type in ("corn", "softmax", "stats"):
+    if head_type in ("corn", "softmax", "stats", "temporal_stats", "temporal_transformer"):
         log_fields = (
             ("%d", "epoch"),
             ("%.5f", "train_acc"),
@@ -212,7 +233,11 @@ def main(args_eval, resume_preempt=False):
         model_kwargs=args_model,
         wrapper_kwargs=args_wrapper,
         device=device,
+        trainable=finetune_encoder,
+        trainable_blocks=encoder_trainable_blocks,
+        trainable_patterns=encoder_trainable_patterns,
     )
+    encoder_trainable = any(p.requires_grad for p in encoder.parameters())
     # -- init classifier
     classifiers = [
         _build_classifier(
@@ -226,6 +251,9 @@ def main(args_eval, resume_preempt=False):
         for _ in opt_kwargs
     ]
     classifiers = [DistributedDataParallel(c, static_graph=True) for c in classifiers]
+    if encoder_trainable:
+        logger.info("Wrapping trainable encoder with DDP")
+        encoder = DistributedDataParallel(encoder, static_graph=True)
     print(classifiers[0])
 
     train_loader, train_sampler = make_dataloader(
@@ -276,14 +304,17 @@ def main(args_eval, resume_preempt=False):
         iterations_per_epoch=ipe,
         num_epochs=num_epochs,
         use_bfloat16=use_bfloat16,
+        encoder=encoder if encoder_trainable else None,
+        encoder_opt_kwargs=encoder_opt_kwargs,
     )
 
     # -- load training checkpoint
     start_epoch = 0
     if resume_checkpoint and os.path.exists(latest_path):
-        classifiers, optimizer, scaler, start_epoch = load_checkpoint(
+        encoder, classifiers, optimizer, scaler, start_epoch = load_checkpoint(
             device=device,
             r_path=latest_path,
+            encoder=encoder,
             classifiers=classifiers,
             opt=optimizer,
             scaler=scaler,
@@ -307,6 +338,9 @@ def main(args_eval, resume_preempt=False):
             "metrics": metrics,
             "selection_metric": selection_metric,
         }
+        if encoder_trainable:
+            save_dict["encoder"] = _trainable_encoder_state_dict(encoder)
+            save_dict["encoder_trainable_only"] = True
         if rank == 0:
             torch.save(save_dict, path)
 
@@ -336,6 +370,7 @@ def main(args_eval, resume_preempt=False):
                 class_weight=softmax_class_weight,
                 label_smoothing=label_smoothing,
                 prediction_mode=prediction_mode,
+                encoder_trainable=encoder_trainable,
             )
             train_acc = train_result["acc"]
 
@@ -357,6 +392,7 @@ def main(args_eval, resume_preempt=False):
             label_smoothing=label_smoothing,
             selection_metric=selection_metric,
             prediction_mode=prediction_mode,
+            encoder_trainable=encoder_trainable,
         )
         val_acc = val_result["acc"]
 
@@ -377,7 +413,7 @@ def main(args_eval, resume_preempt=False):
             )
         )
         if rank == 0:
-            if head_type in ("corn", "softmax", "stats"):
+            if head_type in ("corn", "softmax", "stats", "temporal_stats", "temporal_transformer"):
                 log_values = (
                     epoch + 1,
                     train_acc,
@@ -450,10 +486,12 @@ def run_one_epoch(
     label_smoothing=0.0,
     selection_metric=None,
     prediction_mode="argmax",
+    encoder_trainable=False,
 ):
 
     for c in classifiers:
         c.train(mode=training)
+    encoder.train(mode=training and encoder_trainable)
 
     if head_type == "corn":
         if corn_pos_weight is not None:
@@ -479,6 +517,7 @@ def run_one_epoch(
     ordinal_scores = [[] for _ in classifiers]
     ordinal_preds = [[] for _ in classifiers]
     ordinal_labels = [[] for _ in classifiers]
+    ordinal_indices = [[] for _ in classifiers]
     for itr, data in enumerate(data_loader):
         if training:
             [s.step() for s in scheduler]
@@ -495,23 +534,28 @@ def run_one_epoch(
             metadata_features = data[4].to(device, non_blocking=True) if len(data) > 4 else None
             batch_size = len(labels)
             batch_coverage = _batch_coverage(data[3]) if len(data) > 3 else {}
+            batch_sample_indices = _batch_sample_indices(data[3], batch_size) if len(data) > 3 else None
             for key, meter in coverage_meters.items():
                 if key in batch_coverage:
                     meter.update(float(AllReduce.apply(torch.tensor(batch_coverage[key], device=device))), batch_size)
 
             # Forward and prediction
-            with torch.no_grad():
-                outputs = encoder(clips, clip_indices)
-                if not training:
-                    outputs = [
-                        [_classifier_forward(c, o, metadata_features) for o in outputs]
-                        for c in classifiers
-                    ]
+            if training and encoder_trainable:
+                encoder_outputs = encoder(clips, clip_indices)
+            else:
+                with torch.no_grad():
+                    encoder_outputs = encoder(clips, clip_indices)
             if training:
                 outputs = [
-                    [_classifier_forward(c, o, metadata_features) for o in outputs]
+                    [_classifier_forward(c, o, metadata_features) for o in encoder_outputs]
                     for c in classifiers
                 ]
+            else:
+                with torch.no_grad():
+                    outputs = [
+                        [_classifier_forward(c, o, metadata_features) for o in encoder_outputs]
+                        for c in classifiers
+                    ]
 
         # Compute loss
         losses = [[criterion(o, labels) for o in coutputs] for coutputs in outputs]
@@ -529,6 +573,8 @@ def run_one_epoch(
                         ordinal_scores[classifier_idx].extend(scores_i.detach().cpu().float().numpy().tolist())
                         ordinal_preds[classifier_idx].extend(preds_i.detach().cpu().long().numpy().tolist())
                         ordinal_labels[classifier_idx].extend(labels_cpu)
+                        if batch_sample_indices is not None:
+                            ordinal_indices[classifier_idx].extend(batch_sample_indices)
             else:
                 outputs = [sum([F.softmax(o, dim=1) for o in coutputs]) / len(coutputs) for coutputs in outputs]
                 score_range = torch.arange(num_classes, device=device, dtype=outputs[0].dtype)
@@ -550,6 +596,8 @@ def run_one_epoch(
                         ordinal_scores[classifier_idx].extend(scores_i.detach().cpu().float().numpy().tolist())
                         ordinal_preds[classifier_idx].extend(preds_i.detach().cpu().long().numpy().tolist())
                         ordinal_labels[classifier_idx].extend(labels_cpu)
+                        if batch_sample_indices is not None:
+                            ordinal_indices[classifier_idx].extend(batch_sample_indices)
             top1_accs = [float(AllReduce.apply(t1a)) for t1a in top1_accs]
             for t1m, t1a in zip(top1_meters, top1_accs):
                 t1m.update(t1a)
@@ -581,17 +629,28 @@ def run_one_epoch(
         "acc": float(_agg_top1.max()),
         "coverage": {key: float(meter.avg) for key, meter in coverage_meters.items() if meter.count > 0},
     }
-    if head_type in ("corn", "softmax", "stats") and not training:
+    if head_type in ("corn", "softmax", "stats", "temporal_stats", "temporal_transformer") and not training:
         per_classifier = []
-        for scores_i, preds_i, labels_i in zip(ordinal_scores, ordinal_preds, ordinal_labels):
+        for scores_i, preds_i, labels_i, indices_i in zip(
+            ordinal_scores,
+            ordinal_preds,
+            ordinal_labels,
+            ordinal_indices,
+        ):
             gathered_scores = _all_gather_python_list(scores_i)
             gathered_preds = _all_gather_python_list(preds_i)
             gathered_labels = _all_gather_python_list(labels_i)
+            gathered_indices = _all_gather_python_list(indices_i) if indices_i else None
             per_classifier.append(
                 _ordinal_metrics(
                     labels=np.array(gathered_labels, dtype=np.int64),
                     predictions=np.array(gathered_preds, dtype=np.int64),
                     scores=np.array(gathered_scores, dtype=np.float64),
+                    sample_indices=(
+                        np.array(gathered_indices, dtype=np.int64)
+                        if gathered_indices is not None
+                        else None
+                    ),
                     num_classes=num_classes,
                 )
             )
@@ -600,6 +659,7 @@ def run_one_epoch(
             selection_metric or ("quadratic_weighted_kappa" if head_type == "corn" else "accuracy"),
         )
         result.update(per_classifier[best_idx])
+        result["acc"] = result.get("val_acc", result["acc"])
         result["best_classifier"] = int(best_idx)
         result["per_classifier"] = per_classifier
     return result
@@ -617,6 +677,18 @@ def _build_classifier(head_type, embed_dim, num_heads, depth, num_classes, head_
         )
     if head_type == "stats":
         return StatsPoolingClassifier(
+            embed_dim=embed_dim,
+            num_classes=num_classes,
+            **head_kwargs,
+        )
+    if head_type == "temporal_stats":
+        return TemporalStatsPoolingClassifier(
+            embed_dim=embed_dim,
+            num_classes=num_classes,
+            **head_kwargs,
+        )
+    if head_type == "temporal_transformer":
+        return TemporalTransformerClassifier(
             embed_dim=embed_dim,
             num_classes=num_classes,
             **head_kwargs,
@@ -753,6 +825,25 @@ def _batch_coverage(coverage):
     return metrics
 
 
+def _batch_sample_indices(coverage, batch_size):
+    if not isinstance(coverage, dict):
+        return None
+    value = coverage.get("sample_index")
+    if value is None:
+        return None
+    if isinstance(value, torch.Tensor):
+        indices = value.detach().cpu().long().numpy().tolist()
+    elif isinstance(value, (list, tuple)):
+        indices = [int(v) for v in value]
+    elif isinstance(value, (int, float)):
+        indices = [int(value)]
+    else:
+        return None
+    if len(indices) != batch_size:
+        return None
+    return indices
+
+
 def _coverage_metric(result, key):
     value = result.get("coverage", {}).get(key, float("nan"))
     return value if isinstance(value, (int, float)) and np.isfinite(value) else float("nan")
@@ -777,10 +868,31 @@ def _best_metric_index(metrics, key):
     return int(np.argmax(finite))
 
 
-def _ordinal_metrics(labels, predictions, scores, num_classes):
+def _ordinal_metrics(labels, predictions, scores, num_classes, sample_indices=None):
+    raw_n = int(labels.size)
+    if sample_indices is not None and sample_indices.size == labels.size:
+        keep = []
+        seen = set()
+        for row_idx, sample_idx in enumerate(sample_indices.tolist()):
+            sample_idx = int(sample_idx)
+            if sample_idx in seen:
+                continue
+            seen.add(sample_idx)
+            keep.append(row_idx)
+        keep = np.array(keep, dtype=np.int64)
+        labels = labels[keep]
+        predictions = predictions[keep]
+        scores = scores[keep]
+        sample_indices = sample_indices[keep]
+        order = np.argsort(sample_indices, kind="mergesort")
+        labels = labels[order]
+        predictions = predictions[order]
+        scores = scores[order]
+
     if labels.size == 0:
         return {
             "n": 0,
+            "raw_n": raw_n,
             "accuracy": float("nan"),
             "val_acc": float("nan"),
             "spearman": float("nan"),
@@ -792,6 +904,7 @@ def _ordinal_metrics(labels, predictions, scores, num_classes):
     labels = np.clip(labels, 0, num_classes - 1)
     return {
         "n": int(labels.size),
+        "raw_n": raw_n,
         "accuracy": float(100.0 * np.mean(predictions == labels)),
         "val_acc": float(100.0 * np.mean(predictions == labels)),
         "spearman": _spearman(labels.astype(float), scores.astype(float)),
@@ -852,9 +965,28 @@ def _confusion_matrix(labels, predictions, num_classes):
     return matrix
 
 
-def load_checkpoint(device, r_path, classifiers, opt, scaler, val_only=False):
+def _unwrap_module(module):
+    return module.module if hasattr(module, "module") else module
+
+
+def _trainable_encoder_state_dict(encoder):
+    module = _unwrap_module(encoder)
+    trainable_names = {name for name, param in module.named_parameters() if param.requires_grad}
+    state = module.state_dict()
+    return {
+        name: tensor.detach().cpu()
+        for name, tensor in state.items()
+        if name in trainable_names
+    }
+
+
+def load_checkpoint(device, r_path, encoder, classifiers, opt, scaler, val_only=False):
     checkpoint = robust_checkpoint_loader(r_path, map_location=torch.device("cpu"))
     logger.info(f"read-path: {r_path}")
+
+    if encoder is not None and checkpoint.get("encoder") is not None:
+        msg = _unwrap_module(encoder).load_state_dict(checkpoint["encoder"], strict=False)
+        logger.info(f"loaded trainable encoder state with msg: {msg}")
 
     # -- loading encoder
     pretrained_dict = checkpoint["classifiers"]
@@ -862,7 +994,7 @@ def load_checkpoint(device, r_path, classifiers, opt, scaler, val_only=False):
 
     if val_only:
         logger.info(f"loaded pretrained classifier from epoch with msg: {msg}")
-        return classifiers, opt, scaler, 0
+        return encoder, classifiers, opt, scaler, 0
 
     epoch = checkpoint["epoch"]
     logger.info(f"loaded pretrained classifier from epoch {epoch} with msg: {msg}")
@@ -875,7 +1007,7 @@ def load_checkpoint(device, r_path, classifiers, opt, scaler, val_only=False):
 
     logger.info(f"loaded optimizers from epoch {epoch}")
 
-    return classifiers, opt, scaler, epoch
+    return encoder, classifiers, opt, scaler, epoch
 
 
 def load_pretrained(encoder, pretrained, checkpoint_key="target_encoder"):
@@ -973,12 +1105,20 @@ def make_dataloader(
     return data_loader, data_sampler
 
 
-def init_opt(classifiers, iterations_per_epoch, opt_kwargs, num_epochs, use_bfloat16=False):
+def init_opt(
+    classifiers,
+    iterations_per_epoch,
+    opt_kwargs,
+    num_epochs,
+    use_bfloat16=False,
+    encoder=None,
+    encoder_opt_kwargs=None,
+):
     optimizers, schedulers, wd_schedulers, scalers = [], [], [], []
     for c, kwargs in zip(classifiers, opt_kwargs):
         param_groups = [
             {
-                "params": (p for n, p in c.named_parameters()),
+                "params": [p for p in c.parameters() if p.requires_grad],
                 "mc_warmup_steps": int(kwargs.get("warmup") * iterations_per_epoch),
                 "mc_start_lr": kwargs.get("start_lr"),
                 "mc_ref_lr": kwargs.get("ref_lr"),
@@ -987,6 +1127,22 @@ def init_opt(classifiers, iterations_per_epoch, opt_kwargs, num_epochs, use_bflo
                 "mc_final_wd": kwargs.get("final_wd"),
             }
         ]
+        if encoder is not None and encoder_opt_kwargs is not None:
+            encoder_params = [p for p in _unwrap_module(encoder).parameters() if p.requires_grad]
+            if len(encoder_params) == 0:
+                raise ValueError("encoder_opt_kwargs was provided, but the encoder has no trainable parameters.")
+            param_groups.append(
+                {
+                    "params": encoder_params,
+                    "mc_warmup_steps": int(encoder_opt_kwargs.get("warmup") * iterations_per_epoch),
+                    "mc_start_lr": encoder_opt_kwargs.get("start_lr"),
+                    "mc_ref_lr": encoder_opt_kwargs.get("ref_lr"),
+                    "mc_final_lr": encoder_opt_kwargs.get("final_lr"),
+                    "mc_ref_wd": encoder_opt_kwargs.get("ref_wd"),
+                    "mc_final_wd": encoder_opt_kwargs.get("final_wd"),
+                }
+            )
+            logger.info("Optimizer includes %.2fM trainable encoder parameters", sum(p.numel() for p in encoder_params) / 1.0e6)
         logger.info("Using AdamW")
         optimizers += [torch.optim.AdamW(param_groups)]
         schedulers += [WarmupCosineLRSchedule(optimizers[-1], T_max=int(num_epochs * iterations_per_epoch))]
