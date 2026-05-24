@@ -39,6 +39,10 @@ wandb/
 *.pt
 *.pth
 
+# Generated PD-hand visual review artifacts
+docs/results/**/*.pdf
+docs/results/lora_error_inspection/
+
 # Personal Claude Code instructions (not for sharing)
 CLAUDE.local.md
 .claude/

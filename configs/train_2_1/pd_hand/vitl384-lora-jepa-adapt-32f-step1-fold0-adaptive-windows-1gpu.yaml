@@ -1,0 +1,156 @@
+app: vjepa_2_1
+nodes: 1
+tasks_per_node: 1
+cpus_per_task: 8
+mem_per_gpu: 80G
+folder: /gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/vjepa2_jepa_lora_adapt/item_3_4/fold_0_vitl384_32f_step1_rank8_handcrop_adaptive_windows_1gpu
+data:
+  dataset_type: ClipDataset
+  datasets:
+  - /gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/splits/item_3_4/fold_0_train.csv
+  datasets_weights:
+  - 1.0
+  batch_size: 1
+  crop_size: 384
+  patch_size: 16
+  dataset_fpcs:
+  - 32
+  tubelet_size: 2
+  frame_step: 1
+  num_clips: 1
+  random_clip_sampling: false
+  allow_clip_overlap: false
+  num_workers: 0
+  persistent_workers: false
+  pin_mem: false
+  dataset_kwargs:
+    hand_crop: true
+    crop_size: 128
+    crop_scale: 1.5
+    adaptive_num_clips: true
+    adaptive_duration_col: duration_s
+    adaptive_min_clips: 1
+data_aug:
+  auto_augment: false
+  motion_shift: false
+  random_horizontal_flip: false
+  random_resize_aspect_ratio:
+  - 1.0
+  - 1.0
+  random_resize_scale:
+  - 1.0
+  - 1.0
+  reprob: 0.0
+loss:
+  loss_exp: 1.0
+  predict_all: true
+  reg_coeff: 0.0
+  shift_by_n: 0
+  weight_distance_loss: false
+mask:
+- aspect_ratio:
+  - 0.75
+  - 1.5
+  full_complement: false
+  max_keep: null
+  max_temporal_keep: 0.5
+  num_blocks: 8
+  spatial_scale:
+  - 0.15
+  - 0.15
+  temporal_scale:
+  - 0.5
+  - 0.5
+- aspect_ratio:
+  - 0.75
+  - 1.5
+  full_complement: false
+  max_keep: null
+  max_temporal_keep: 0.5
+  num_blocks: 2
+  spatial_scale:
+  - 0.7
+  - 0.7
+  temporal_scale:
+  - 0.5
+  - 0.5
+meta:
+  dtype: bfloat16
+  eval_freq: 100
+  load_checkpoint: true
+  read_checkpoint: null
+  save_every_freq: 5
+  seed: 239
+  use_sdpa: true
+model:
+  compile_model: false
+  has_cls_first: false
+  img_temporal_dim_size: 1
+  interpolate_rope: true
+  is_causal: false
+  lambda_value_img: 0.5
+  lambda_value_vid: 0.5
+  lambda_progressive: false
+  levels_predictor: 4
+  modality_embedding: true
+  model_name: vit_large
+  n_registers: 0
+  n_registers_predictor: 0
+  normalize_predictor: false
+  pred_depth: 12
+  pred_embed_dim: 384
+  pred_is_causal: false
+  pred_num_heads: 12
+  uniform_power: true
+  use_activation_checkpointing: true
+  use_mask_tokens: true
+  use_rope: true
+  zero_init_mask_tokens: true
+  lora:
+    enabled: true
+    apply_to:
+    - encoder
+    target_modules:
+    - attn.qkv
+    - attn.proj
+    rank: 8
+    alpha: 16
+    dropout: 0.05
+    freeze_encoder_base: true
+    train_bias: none
+    train_layer_norm: false
+    train_embeddings: false
+    train_patch_embed: false
+    train_predictor: true
+optimization:
+  is_anneal: true
+  anneal_ckpt: /gpfs/milgram/pi/scherzer/yl2428/vjepa2/checkpoints/vjepa2_1_vitl_dist_vitG_384.pt
+  resume_anneal: false
+  ema:
+  - 0.99925
+  - 0.99925
+  epochs: 25
+  final_lr: 1.0e-06
+  final_weight_decay: 0.01
+  ipe: null
+  ipe_scale: 1.0
+  clip_microbatch_size: 4
+  lr: 0.0001
+  start_lr: 1.0e-05
+  warmup: 2
+  weight_decay: 0.01
+wandb:
+  enabled: true
+  project: pd-hand-vjepa2
+  name: pd-hand-item-3_4-fold-0-vjepa21-lora-jepa-adaptive-windows-r8-1gpu
+  id: pd-hand-item-3_4-fold-0-vjepa21-lora-jepa-adaptive-windows-r8-1gpu
+  resume: allow
+  job_type: vjepa_2_1_lora_adapt
+  tags:
+  - vjepa2_1
+  - jepa_adapt
+  - adaptive_windows
+  - lora
+  - item_3_4
+  - fold_0
+  - one_gpu

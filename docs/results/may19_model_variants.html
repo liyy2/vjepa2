@@ -1,0 +1,551 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>may19 — V-JEPA model variants visualized</title>
+<style>
+  :root {
+    --fg: #1a1a1a;
+    --muted: #6a6a6a;
+    --accent: #c9430b;
+    --good: #1f7a47;
+    --bad: #b22222;
+    --border: #d8d4cc;
+    --bg-soft: #faf7f0;
+    --bg-callout: #f3efe5;
+    --bg-warn: #fff6e0;
+    --bg-good: #e7f2eb;
+    --bg-bad: #fef0f0;
+    --bg-cool: #eef3f7;
+  }
+  html { scroll-behavior: smooth; }
+  body { background: #fffdf8; color: var(--fg);
+         font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+         max-width: 1180px; margin: 36px auto; padding: 0 26px; line-height: 1.55; font-size: 15.5px; }
+  h1 { font-size: 28px; margin-bottom: 4px; }
+  h2 { font-size: 22px; margin-top: 46px; padding-bottom: 4px; border-bottom: 2px solid var(--border); }
+  h3 { font-size: 16px; margin-top: 22px; color: var(--accent); }
+  code { font-family: "JetBrains Mono", Menlo, monospace; font-size: 12.8px;
+         background: var(--bg-soft); padding: 1px 5px; border-radius: 3px; }
+  .lede { color: var(--muted); font-size: 16px; }
+
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin: 16px 0; }
+  .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; margin: 16px 0; }
+  @media (max-width: 920px) { .grid-2, .grid-3 { grid-template-columns: 1fr; } }
+
+  .card {
+    background: var(--bg-soft);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 12px 14px;
+  }
+  .card h4 {
+    margin: 0 0 6px;
+    font-size: 14px;
+    color: var(--accent);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .card p { margin: 6px 0; font-size: 14px; }
+  .card .score {
+    margin-top: 10px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border);
+    font-size: 13.5px;
+  }
+  .card svg { display: block; margin: 6px auto 10px; }
+  .pill { display: inline-block; padding: 2px 9px; border-radius: 11px; font-size: 11px;
+          background: var(--bg-callout); color: var(--accent); font-weight: 600;
+          letter-spacing: 0.04em; text-transform: uppercase; vertical-align: middle; }
+  .pill.good { background: var(--bg-good); color: var(--good); }
+  .pill.bad { background: var(--bg-bad); color: var(--bad); }
+  .pill.warn { background: var(--bg-warn); color: #8a6a00; }
+  .pill.cool { background: var(--bg-cool); color: #265e8a; }
+  .pill.target { background: var(--bg-good); color: var(--good); font-weight: 700; }
+
+  .callout { background: var(--bg-callout); border-left: 3px solid var(--accent);
+             padding: 10px 16px; margin: 14px 0; font-size: 14px; }
+  .callout.good { background: var(--bg-good); border-left-color: var(--good); }
+  .callout.bad { background: var(--bg-bad); border-left-color: var(--bad); }
+  .callout strong { color: var(--accent); }
+  .callout.good strong { color: var(--good); }
+  .callout.bad strong { color: var(--bad); }
+
+  table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 13.5px; }
+  th { background: var(--bg-callout); text-align: left; font-weight: 600; }
+  th, td { border: 1px solid var(--border); padding: 6px 10px; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+
+  /* SVG palette for diagrams */
+  .sv-input { fill: #ece4d3; stroke: #b09a6e; }
+  .sv-cache-fine { fill: #265e8a; opacity: 0.85; }
+  .sv-cache-coarse { fill: #5b8aa0; opacity: 0.85; }
+  .sv-cache-loraft { fill: #c9430b; opacity: 0.85; }
+  .sv-cache-meanstd { fill: #b88a00; opacity: 0.85; }
+  .sv-head { fill: #1f7a47; opacity: 0.85; }
+  .sv-corn { fill: #5b4b8a; opacity: 0.85; }
+  .sv-stats { fill: #a04550; opacity: 0.85; }
+  .sv-arrow { stroke: #6a6a6a; stroke-width: 1.5; fill: none; marker-end: url(#arrow); }
+  text { font-family: -apple-system, sans-serif; font-size: 11px; fill: #1a1a1a; }
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position: absolute;">
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <polygon points="0 0, 8 4, 0 8" fill="#6a6a6a"/>
+    </marker>
+    <marker id="arrow-r" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <polygon points="0 0, 8 4, 0 8" fill="#c9430b"/>
+    </marker>
+  </defs>
+</svg>
+
+<h1>V-JEPA model variants — what we tried, visualized</h1>
+<p class="lede">
+  Each variant is a different choice on one of the three axes the user flagged: spatial
+  pooling, temporal handling, and feature-level fusion. Reference target:
+  <span class="pill target">kinematic LightGBM — QWK 0.728</span>.
+  Best pure V-JEPA so far: <span class="pill warn">QWK 0.533</span> (frozen tstats top-K=24 ensemble).
+</p>
+
+<h2>1. Cache variants — how a 10 s video becomes a token sequence</h2>
+
+<p>Every downstream head is built on top of one of these <em>caches</em> — a per-clip tensor
+extracted from V-JEPA. Each variant differs in (a) which encoder produced it, (b) the
+temporal stride / segments grid, and (c) how spatial patches per temporal slice are pooled.</p>
+
+<div class="grid-2">
+
+  <div class="card">
+    <h4>Cache A — "fine" frozen <span class="pill cool">used by every probe</span></h4>
+    <svg viewBox="0 0 540 220">
+      <text x="0" y="14">Input: 10 s video @ 30 fps (~300 frames)</text>
+      <rect x="0" y="22" width="540" height="14" class="sv-input"/>
+
+      <text x="0" y="56">12 segments × 32 frames × stride 1 (1.07 s/window, overlap)</text>
+      <g class="sv-cache-fine" stroke="#173a5a">
+        <rect x="0" y="64" width="42" height="12"/>
+        <rect x="46" y="64" width="42" height="12"/>
+        <rect x="92" y="64" width="42" height="12"/>
+        <rect x="138" y="64" width="42" height="12"/>
+        <rect x="184" y="64" width="42" height="12"/>
+        <rect x="230" y="64" width="42" height="12"/>
+        <rect x="276" y="64" width="42" height="12"/>
+        <rect x="322" y="64" width="42" height="12"/>
+        <rect x="368" y="64" width="42" height="12"/>
+        <rect x="414" y="64" width="42" height="12"/>
+        <rect x="460" y="64" width="42" height="12"/>
+        <rect x="506" y="64" width="34" height="12"/>
+      </g>
+
+      <text x="0" y="100">Per segment: V-JEPA ViT-L → 16 tubelets × 576 spatial patches × 1024-D</text>
+      <text x="0" y="120">→ mean over 576 spatial patches → 16 × 1024 per segment</text>
+      <text x="0" y="140">→ 12 segments × 16 tubelets = <strong>192 temporal tokens × 1024-D</strong></text>
+
+      <g class="sv-cache-fine" stroke="#173a5a">
+        <rect x="0" y="155" width="540" height="20"/>
+      </g>
+      <text x="200" y="170" fill="white" font-weight="600">[N=404, T=192, D=1024]</text>
+
+      <text x="0" y="200" fill="#6a6a6a">spatial → squashed (user's choice).  temporal → kept (192 tokens).</text>
+    </svg>
+    <p>Default mean spatial pool. The user's preferred "squash spatial, keep temporal" arrangement.</p>
+    <div class="score"><strong>Best downstream QWK:</strong> <span class="pill warn">0.533</span> (tstats top-24 ensemble) / 0.510 (combiner d=128)</div>
+  </div>
+
+  <div class="card">
+    <h4>Cache B — "coarse" frozen <span class="pill cool">multi-scale partner</span></h4>
+    <svg viewBox="0 0 540 220">
+      <text x="0" y="14">Same input video, but each forward pass spans more time</text>
+      <rect x="0" y="22" width="540" height="14" class="sv-input"/>
+
+      <text x="0" y="56">8 segments × 32 frames × stride 2 (2.13 s/window)</text>
+      <g class="sv-cache-coarse" stroke="#2a4a5a">
+        <rect x="0" y="64" width="65" height="12"/>
+        <rect x="70" y="64" width="65" height="12"/>
+        <rect x="140" y="64" width="65" height="12"/>
+        <rect x="210" y="64" width="65" height="12"/>
+        <rect x="280" y="64" width="65" height="12"/>
+        <rect x="350" y="64" width="65" height="12"/>
+        <rect x="420" y="64" width="65" height="12"/>
+        <rect x="490" y="64" width="50" height="12"/>
+      </g>
+
+      <text x="0" y="100">8 segments × 16 tubelets = 128 temporal tokens × 1024-D</text>
+      <text x="0" y="120">Each tubelet covers ~133 ms (vs 67 ms for fine)</text>
+
+      <g class="sv-cache-coarse" stroke="#2a4a5a">
+        <rect x="0" y="135" width="360" height="20"/>
+      </g>
+      <text x="120" y="150" fill="white" font-weight="600">[N=404, T=128, D=1024]</text>
+
+      <text x="0" y="185" fill="#6a6a6a">More taps per window → motion context, but lower temporal resolution.</text>
+    </svg>
+    <p>Coarser temporal grid, intended to capture across-tap rhythm at the cost of fine motion.</p>
+    <div class="score"><strong>Best as second stream</strong> in multi-scale combiner: QWK 0.476 (slight bump over fine-only).</div>
+  </div>
+
+  <div class="card">
+    <h4>Cache C — "mean_std" frozen <span class="pill cool">multi-pool partner</span></h4>
+    <svg viewBox="0 0 540 200">
+      <text x="0" y="14">Same fine grid (12×16=192 tubelets) — different spatial pool</text>
+
+      <text x="0" y="44">Per tubelet, over 576 spatial patches:</text>
+      <g>
+        <rect x="0" y="50" width="200" height="22" class="sv-cache-fine"/>
+        <text x="40" y="65" fill="white" font-weight="600">mean (1024-D)</text>
+        <rect x="200" y="50" width="200" height="22" class="sv-cache-meanstd"/>
+        <text x="232" y="65" fill="white" font-weight="600">std (1024-D)</text>
+      </g>
+
+      <text x="0" y="100">Stacked into a 2048-D vector per tubelet</text>
+
+      <g class="sv-cache-meanstd" stroke="#7a5a00">
+        <rect x="0" y="115" width="540" height="20"/>
+      </g>
+      <text x="200" y="130" fill="white" font-weight="600">[N=404, T=192, D=2048]</text>
+
+      <text x="0" y="165" fill="#6a6a6a">Preserves dispersion of activation across spatial patches per slice.</text>
+    </svg>
+    <p>Tests whether "how varied is the activity in the frame" adds signal over just the mean.</p>
+    <div class="score"><strong>Best multipool QWK:</strong> <span class="pill warn">0.464</span> (alone) / 0.453 (mean+meanstd). Did not help.</div>
+  </div>
+
+  <div class="card">
+    <h4>Cache D — "LoRA-FT" fine <span class="pill bad">no improvement</span></h4>
+    <svg viewBox="0 0 540 200">
+      <text x="0" y="14">Same fine grid — but encoder was supervised-LoRA-fine-tuned on may19</text>
+
+      <text x="0" y="44">Train V-JEPA ViT-L with LoRA rank 8 on attn.qkv + attn.proj</text>
+      <text x="0" y="60">12 epochs of softmax CE on fold-0 train (probe QWK plateaus at 0.464)</text>
+      <text x="0" y="76">Merge LoRA Δ into base weights → cache fresh features</text>
+
+      <g class="sv-cache-loraft" stroke="#7a2906">
+        <rect x="0" y="100" width="540" height="20"/>
+      </g>
+      <text x="200" y="115" fill="white" font-weight="600">[N=404, T=192, D=1024]</text>
+
+      <text x="0" y="155" fill="#6a6a6a">Same shape as Cache A, different weights underneath.</text>
+    </svg>
+    <p>Three LoRA-FT attempts (CORN-auto pos_weight, CORN null, softmax balanced) collapsed.
+       The 4th, softmax unweighted, ran cleanly but produced features that matched (didn't exceed)
+       the frozen ceiling.</p>
+    <div class="score"><strong>Best downstream QWK on Cache D:</strong> <span class="pill bad">0.476</span> — actually below the frozen Cache A best.</div>
+  </div>
+
+</div>
+
+<h2>2. Probe variants — how the cache becomes a CORN prediction</h2>
+
+<div class="grid-3">
+
+  <div class="card">
+    <h4>P1 — TemporalStatsMLP</h4>
+    <svg viewBox="0 0 360 220">
+      <rect x="0" y="0" width="360" height="20" class="sv-cache-fine"/>
+      <text x="120" y="14" fill="white" font-weight="600">cache [N, 192, 1024]</text>
+
+      <line x1="180" y1="20" x2="180" y2="40" stroke="#6a6a6a" stroke-width="1.5"/>
+
+      <text x="0" y="56" fill="#1a1a1a" font-weight="600">Stats reduction over time:</text>
+      <text x="0" y="72" fill="#6a6a6a">mean, std, max, first, last, last−first,</text>
+      <text x="0" y="86" fill="#6a6a6a">12 temporal-bin means + stds, |Δemb| stats,</text>
+      <text x="0" y="100" fill="#6a6a6a">FFT log-band powers (0.5–2/2–5/5–8 Hz)</text>
+
+      <line x1="180" y1="105" x2="180" y2="125" stroke="#6a6a6a" stroke-width="1.5"/>
+
+      <rect x="60" y="125" width="240" height="22" class="sv-stats"/>
+      <text x="100" y="140" fill="white" font-weight="600">2-layer MLP (CE / CORN)</text>
+
+      <line x1="180" y1="147" x2="180" y2="167" stroke="#6a6a6a" stroke-width="1.5"/>
+
+      <rect x="90" y="167" width="180" height="22" class="sv-corn"/>
+      <text x="135" y="182" fill="white" font-weight="600">5-class logits</text>
+    </svg>
+    <p>The user's existing pipeline. Velocity grid: 192 configs × seeds × lrs.</p>
+    <div class="score">Best single: <span class="pill warn">0.515</span><br>Best top-K=24 ensemble: <span class="pill warn">0.533</span></div>
+  </div>
+
+  <div class="card">
+    <h4>P2 — TemporalCornCombiner (single scale)</h4>
+    <svg viewBox="0 0 360 220">
+      <rect x="0" y="0" width="360" height="20" class="sv-cache-fine"/>
+      <text x="120" y="14" fill="white" font-weight="600">cache [N, 192, 1024]</text>
+
+      <line x1="180" y1="20" x2="180" y2="34" stroke="#6a6a6a" stroke-width="1.5"/>
+
+      <rect x="20" y="36" width="320" height="18" class="sv-head"/>
+      <text x="35" y="50" fill="white" font-weight="600">Linear proj 1024 → d_model</text>
+
+      <text x="0" y="74" fill="#1a1a1a" font-weight="600">+ 2D positional encoding:</text>
+      <text x="0" y="88" fill="#6a6a6a">seg_idx ∈ 0..11 (which 1-s window)</text>
+      <text x="0" y="102" fill="#6a6a6a">within_idx ∈ 0..15 (where in the window)</text>
+
+      <rect x="80" y="112" width="200" height="20" class="sv-head"/>
+      <text x="100" y="126" fill="white" font-weight="600">[CLS] + 192 tokens</text>
+
+      <line x1="180" y1="132" x2="180" y2="148" stroke="#6a6a6a" stroke-width="1.5"/>
+
+      <rect x="60" y="148" width="240" height="22" class="sv-head"/>
+      <text x="80" y="163" fill="white" font-weight="600">Transformer encoder (L=2-4)</text>
+
+      <line x1="180" y1="170" x2="180" y2="188" stroke="#6a6a6a" stroke-width="1.5"/>
+
+      <rect x="90" y="188" width="180" height="22" class="sv-corn"/>
+      <text x="115" y="203" fill="white" font-weight="600">CORN K-1 logits</text>
+    </svg>
+    <p>Cross-window combiner with order-aware 2D positional encoding. Replaces logit-mean
+       across segments with attention.</p>
+    <div class="score">Best (tiny d=128 L=2): <span class="pill warn">0.510</span><br>0.54M params, 6-epoch best</div>
+  </div>
+
+  <div class="card">
+    <h4>P3 — TemporalCornCombiner (multi-scale)</h4>
+    <svg viewBox="0 0 360 220">
+      <rect x="0" y="0" width="170" height="18" class="sv-cache-fine"/>
+      <text x="15" y="13" fill="white" font-size="10" font-weight="600">fine [192, 1024]</text>
+      <rect x="190" y="0" width="170" height="18" class="sv-cache-coarse"/>
+      <text x="210" y="13" fill="white" font-size="10" font-weight="600">coarse [128, 1024]</text>
+
+      <line x1="85" y1="18" x2="85" y2="32" stroke="#6a6a6a"/>
+      <line x1="275" y1="18" x2="275" y2="32" stroke="#6a6a6a"/>
+
+      <rect x="0" y="32" width="170" height="18" class="sv-head"/>
+      <text x="10" y="45" fill="white" font-size="10">proj₁ + pos₁ + stream-emb 0</text>
+      <rect x="190" y="32" width="170" height="18" class="sv-head"/>
+      <text x="200" y="45" fill="white" font-size="10">proj₂ + pos₂ + stream-emb 1</text>
+
+      <line x1="85" y1="50" x2="180" y2="76" stroke="#6a6a6a"/>
+      <line x1="275" y1="50" x2="180" y2="76" stroke="#6a6a6a"/>
+
+      <rect x="20" y="78" width="320" height="20" class="sv-head"/>
+      <text x="60" y="93" fill="white" font-weight="600">[CLS] + concat(fine, coarse) = 320 tokens</text>
+
+      <line x1="180" y1="98" x2="180" y2="118" stroke="#6a6a6a"/>
+
+      <rect x="60" y="118" width="240" height="22" class="sv-head"/>
+      <text x="80" y="133" fill="white" font-weight="600">Shared transformer encoder</text>
+
+      <line x1="180" y1="140" x2="180" y2="160" stroke="#6a6a6a"/>
+
+      <rect x="90" y="160" width="180" height="22" class="sv-corn"/>
+      <text x="115" y="175" fill="white" font-weight="600">CORN K-1 logits</text>
+    </svg>
+    <p>Two parallel streams (different temporal scales), each with own projection + 2D pos
+       encoding + stream embedding, concatenated along time.</p>
+    <div class="score">Best multi-scale: <span class="pill warn">0.476</span> (LoRA-FT) / 0.464 (frozen). Marginal gain.</div>
+  </div>
+
+  <div class="card">
+    <h4>P4 — Combiner with kinematic distillation aux head</h4>
+    <svg viewBox="0 0 360 240">
+      <rect x="0" y="0" width="360" height="20" class="sv-cache-fine"/>
+      <text x="120" y="14" fill="white" font-weight="600">cache [N, 192, 1024]</text>
+
+      <line x1="180" y1="20" x2="180" y2="36" stroke="#6a6a6a"/>
+
+      <rect x="60" y="36" width="240" height="22" class="sv-head"/>
+      <text x="80" y="51" fill="white" font-weight="600">proj + 2D pos + transformer</text>
+
+      <line x1="180" y1="58" x2="180" y2="78" stroke="#6a6a6a"/>
+
+      <rect x="100" y="78" width="160" height="18" class="sv-head"/>
+      <text x="130" y="91" fill="white">CLS hidden</text>
+
+      <line x1="120" y1="96" x2="100" y2="116" stroke="#6a6a6a"/>
+      <line x1="240" y1="96" x2="260" y2="116" stroke="#c9430b" stroke-width="1.5"/>
+
+      <rect x="20" y="116" width="160" height="22" class="sv-corn"/>
+      <text x="50" y="131" fill="white" font-weight="600">CORN K-1 logits</text>
+      <rect x="200" y="116" width="160" height="22" class="sv-stats"/>
+      <text x="220" y="131" fill="white" font-weight="600">aux MSE → 9 kin scalars</text>
+
+      <text x="35" y="156" fill="#1f7a47">CORN loss</text>
+      <text x="220" y="156" fill="#c9430b">+ α × MSE(kin)</text>
+      <text x="100" y="180" font-weight="600">Joint loss</text>
+
+      <text x="0" y="210" fill="#6a6a6a">kin scalars: peak rate, decrement, amplitude mean,</text>
+      <text x="0" y="224" fill="#6a6a6a">FFT band 0.5–2/2–5/5–8 Hz, velocity stats, peak count</text>
+    </svg>
+    <p>Tests whether distilling the kinematic baseline's inputs into the V-JEPA combiner
+       lifts QWK. Aux weight swept α ∈ {0.1, 0.3, 0.6}.</p>
+    <div class="score">Best: <span class="pill bad">0.466</span> — no improvement. §6 of progress report explains why.</div>
+  </div>
+
+  <div class="card">
+    <h4>P5 — LightGBM on summary stats</h4>
+    <svg viewBox="0 0 360 220">
+      <rect x="0" y="0" width="360" height="20" class="sv-cache-fine"/>
+      <text x="120" y="14" fill="white" font-weight="600">cache [N, 192, 1024]</text>
+
+      <line x1="180" y1="20" x2="180" y2="36" stroke="#6a6a6a"/>
+
+      <text x="0" y="50" fill="#1a1a1a" font-weight="600">PCA(D=1024 → 64) then summary stats:</text>
+      <text x="0" y="64" fill="#6a6a6a">mean / std / p10 / p50 / p90 / min / max,</text>
+      <text x="0" y="78" fill="#6a6a6a">velocity / acceleration / decrement / FFT 0.5-2 + 2-6 Hz,</text>
+      <text x="0" y="92" fill="#6a6a6a">peak-rate proxy</text>
+      <text x="0" y="106" fill="#6a6a6a">→ ~1100-D feature vector</text>
+
+      <line x1="180" y1="112" x2="180" y2="130" stroke="#6a6a6a"/>
+
+      <rect x="80" y="130" width="200" height="22" class="sv-stats"/>
+      <text x="105" y="145" fill="white" font-weight="600">LightGBM multiclass</text>
+
+      <line x1="180" y1="152" x2="180" y2="170" stroke="#6a6a6a"/>
+
+      <rect x="100" y="170" width="160" height="22" class="sv-corn"/>
+      <text x="140" y="185" fill="white" font-weight="600">5-class logits</text>
+    </svg>
+    <p>Same recipe as the kinematic baseline (LightGBM on hand-engineered stats) but applied
+       to V-JEPA cached features instead of MediaPipe keypoints.</p>
+    <div class="score"><span class="pill bad">0.322</span> — confirms the combiner architecture adds value over flat stats.</div>
+  </div>
+
+  <div class="card">
+    <h4>P6 — Meta's attentive probe (reference)</h4>
+    <svg viewBox="0 0 360 220">
+      <rect x="0" y="0" width="360" height="20" class="sv-cache-fine"/>
+      <text x="80" y="14" fill="white" font-weight="600">per-segment tokens [N, 192, 1024]</text>
+
+      <text x="0" y="44" fill="#1a1a1a" font-weight="600">For EACH of K=12 segments separately:</text>
+
+      <line x1="180" y1="50" x2="180" y2="64" stroke="#6a6a6a"/>
+
+      <rect x="20" y="64" width="320" height="22" class="sv-head"/>
+      <text x="40" y="79" fill="white" font-weight="600">3× self-attn + 1× cross-attn (4 blocks)</text>
+
+      <line x1="180" y1="86" x2="180" y2="106" stroke="#6a6a6a"/>
+
+      <rect x="80" y="106" width="200" height="22" class="sv-corn"/>
+      <text x="115" y="121" fill="white" font-weight="600">per-segment 5 logits</text>
+
+      <line x1="180" y1="128" x2="180" y2="148" stroke="#6a6a6a"/>
+
+      <rect x="60" y="148" width="240" height="22" fill="#b22222" opacity="0.7"/>
+      <text x="90" y="163" fill="white" font-weight="600">mean of 12 logit vectors ←—</text>
+      <text x="60" y="186" fill="#b22222" font-weight="600">the operation the user flagged</text>
+    </svg>
+    <p>The original V-JEPA attentive probe. Each segment is probed independently and the
+       logit vectors are <em>averaged</em>. That commutative pooling is exactly what the
+       order-aware combiner replaces.</p>
+    <div class="score">Best supervised LoRA-FT probe: <span class="pill bad">0.464</span> (the model the user disliked).</div>
+  </div>
+
+</div>
+
+<h2>3. Multi-source combinations — fusing two streams</h2>
+
+<div class="grid-3">
+
+  <div class="card">
+    <h4>F1 — Multi-scale (fine + coarse)</h4>
+    <svg viewBox="0 0 360 160">
+      <rect x="20" y="20" width="140" height="22" class="sv-cache-fine"/>
+      <text x="40" y="35" fill="white" font-weight="600">Cache A (fine)</text>
+      <rect x="200" y="20" width="140" height="22" class="sv-cache-coarse"/>
+      <text x="218" y="35" fill="white" font-weight="600">Cache B (coarse)</text>
+
+      <line x1="90" y1="42" x2="180" y2="80" stroke="#6a6a6a"/>
+      <line x1="270" y1="42" x2="180" y2="80" stroke="#6a6a6a"/>
+
+      <rect x="60" y="82" width="240" height="22" class="sv-head"/>
+      <text x="90" y="97" fill="white" font-weight="600">Combiner (multi-scale P3)</text>
+
+      <line x1="180" y1="104" x2="180" y2="122" stroke="#6a6a6a"/>
+
+      <rect x="90" y="122" width="180" height="22" class="sv-corn"/>
+      <text x="115" y="137" fill="white" font-weight="600">CORN K-1 logits</text>
+    </svg>
+    <p>Within the same V-JEPA encoder, different temporal grids.</p>
+    <div class="score">Frozen: 0.464 · LoRA-FT: <span class="pill warn">0.476</span> (best LoRA-FT result).</div>
+  </div>
+
+  <div class="card">
+    <h4>F2 — Multi-pool (mean + mean+std)</h4>
+    <svg viewBox="0 0 360 160">
+      <rect x="20" y="20" width="140" height="22" class="sv-cache-fine"/>
+      <text x="40" y="35" fill="white" font-weight="600">Cache A (mean)</text>
+      <rect x="200" y="20" width="140" height="22" class="sv-cache-meanstd"/>
+      <text x="218" y="35" fill="white" font-weight="600">Cache C (mean+std)</text>
+
+      <line x1="90" y1="42" x2="180" y2="80" stroke="#6a6a6a"/>
+      <line x1="270" y1="42" x2="180" y2="80" stroke="#6a6a6a"/>
+
+      <rect x="60" y="82" width="240" height="22" class="sv-head"/>
+      <text x="80" y="97" fill="white" font-weight="600">Combiner (2 streams P3)</text>
+
+      <line x1="180" y1="104" x2="180" y2="122" stroke="#6a6a6a"/>
+
+      <rect x="90" y="122" width="180" height="22" class="sv-corn"/>
+      <text x="115" y="137" fill="white" font-weight="600">CORN K-1 logits</text>
+    </svg>
+    <p>Same temporal grid, different spatial pooling. Tests whether dispersion adds info.</p>
+    <div class="score"><span class="pill bad">0.453</span> — does not help over mean alone.</div>
+  </div>
+
+  <div class="card">
+    <h4>F3 — Multi-encoder (frozen + LoRA-FT)</h4>
+    <svg viewBox="0 0 360 160">
+      <rect x="20" y="20" width="140" height="22" class="sv-cache-fine"/>
+      <text x="32" y="35" fill="white" font-weight="600">Cache A (frozen)</text>
+      <rect x="200" y="20" width="140" height="22" class="sv-cache-loraft"/>
+      <text x="216" y="35" fill="white" font-weight="600">Cache D (LoRA-FT)</text>
+
+      <line x1="90" y1="42" x2="180" y2="80" stroke="#6a6a6a"/>
+      <line x1="270" y1="42" x2="180" y2="80" stroke="#6a6a6a"/>
+
+      <rect x="60" y="82" width="240" height="22" class="sv-head"/>
+      <text x="80" y="97" fill="white" font-weight="600">Combiner (2 encoders P3)</text>
+
+      <line x1="180" y1="104" x2="180" y2="122" stroke="#6a6a6a"/>
+
+      <rect x="90" y="122" width="180" height="22" class="sv-corn"/>
+      <text x="115" y="137" fill="white" font-weight="600">CORN K-1 logits</text>
+    </svg>
+    <p>Same temporal grid + same pool, different encoder weights — frozen ViT-L vs may19-LoRA-FT'd ViT-L.</p>
+    <div class="score"><span class="pill bad">0.453</span> — does not help; the two encoders' caches are highly correlated.</div>
+  </div>
+
+</div>
+
+<h2>4. Summary — what each axis bought us</h2>
+
+<table>
+  <thead>
+    <tr><th>Axis</th><th>Variants tried</th><th>Best QWK</th><th>Insight</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><strong>Spatial pool</strong></td><td>mean / mean+std / topk_mean</td><td>0.510 (mean)</td><td>mean is fine; std doesn't add</td></tr>
+    <tr><td><strong>Temporal grid</strong></td><td>fine (12×16) / coarse (8×16) / fine+coarse</td><td>0.510 (fine) / 0.476 (multi-scale)</td><td>multi-scale fuses but doesn't unlock</td></tr>
+    <tr><td><strong>Probe head</strong></td><td>StatsMLP / Combiner / Combiner+distill / LightGBM / Attentive probe</td><td>0.533 (tstats ensemble)</td><td>head choice matters less than feature quality</td></tr>
+    <tr><td><strong>Encoder</strong></td><td>frozen / LoRA-FT / frozen+LoRA-FT</td><td>0.510 (frozen)</td><td>LoRA-FT did not improve features for downstream</td></tr>
+    <tr><td><strong>Loss</strong></td><td>CORN auto / CORN null / softmax balanced / softmax unweighted</td><td>plateaued at probe QWK 0.464</td><td>only unweighted softmax avoided collapse; gave matched-frozen features</td></tr>
+  </tbody>
+</table>
+
+<div class="callout bad">
+  <strong>Diagnostic conclusion.</strong> Across all combinations of these axes — six probe
+  variants × four cache variants × three fusion modes ≈ ~80 distinct configurations — pure
+  V-JEPA never exceeds <span class="pill warn">QWK 0.533</span>. The §6 R² diagnostic in the
+  progress report explains why: the cached features cannot predict the kinematic features
+  the LightGBM baseline relies on (mean R² = −1.22). It is a feature-quality bottleneck,
+  not an aggregation problem. The user's design instincts ("don't mean-pool logits", "keep
+  the temporal token", "fuse multi-resolution") were correctly implemented; they didn't
+  unlock the encoder because the rhythm signal is missing from the encoder's output to
+  begin with.
+</div>
+
+<p style="color: #6a6a6a; font-size: 12.5px; margin-top: 30px;">
+  Code: <code>scripts/pd_hand/cache_vjepa21_temporal_embeddings.py</code> (cache),
+  <code>train_corn_combiner.py</code> (P2–P4, F1–F3),
+  <code>train_temporal_encoder.py</code> (P1),
+  <code>train_lgbm_on_vjepa_cache.py</code> (P5),
+  <code>train_finger_tapping_kinematic_baseline.py</code> (kinematic baseline, target),
+  <code>merge_lora_from_base.py</code> (LoRA → base weight merge).
+</p>
+
+</body>
+</html>

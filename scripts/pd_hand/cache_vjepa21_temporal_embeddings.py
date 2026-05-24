@@ -48,6 +48,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--crop-scale", type=float, default=2.35, help="Multiplier on hand-landmark radius for crop side length.")
     parser.add_argument("--pool", choices=("mean", "mean_std", "max", "mean_max", "topk_mean"), default="mean")
     parser.add_argument("--topk", type=int, default=16, help="K for topk_mean pool (top-K spatial tokens by L2 norm).")
+    parser.add_argument("--adaptive-num-clips", action="store_true",
+                        help="Use K_i=ceil(duration_s) non-overlapping windows and save a token mask.")
+    parser.add_argument("--adaptive-duration-col", default="duration_s")
+    parser.add_argument("--adaptive-min-clips", type=int, default=1)
+    parser.add_argument("--adaptive-max-clips", type=int, default=0)
     parser.add_argument("--force", action="store_true")
     return parser.parse_args()
 
@@ -90,9 +95,15 @@ def main() -> None:
         crop_tag = ""
         if args.hand_crop:
             crop_tag = f"_cs{args.crop_size}_sc{args.crop_scale:g}"
+        segment_tag = str(num_segments) + "seg"
+        if args.adaptive_num_clips:
+            segment_tag = "adaptive"
+            if args.adaptive_max_clips > 0:
+                segment_tag += f"_max{args.adaptive_max_clips}"
         suffix = (
             f"vjepa21_vitl384_{split_name}_"
-            f"{frames_per_clip}f_step{frame_step}_{num_segments}seg_"
+            f"{frames_per_clip}f_step{frame_step}_"
+            f"{segment_tag}_"
             f"{'handcrop' if args.hand_crop else 'nocrop'}{crop_tag}_{args.pool}.npz"
         )
         out_path = out_dir / suffix
@@ -115,9 +126,17 @@ def main() -> None:
             crop_scale=args.crop_scale,
             pool=args.pool,
             topk=args.topk,
+            adaptive_num_clips=args.adaptive_num_clips,
+            adaptive_duration_col=args.adaptive_duration_col,
+            adaptive_min_clips=args.adaptive_min_clips,
+            adaptive_max_clips=args.adaptive_max_clips or None,
             device=device,
             config={"config": args.config, "split": split_name, "data": data_cfg, "pool": args.pool,
-                    "crop_size": args.crop_size, "crop_scale": args.crop_scale, "topk": args.topk},
+                    "crop_size": args.crop_size, "crop_scale": args.crop_scale, "topk": args.topk,
+                    "adaptive_num_clips": args.adaptive_num_clips,
+                    "adaptive_duration_col": args.adaptive_duration_col,
+                    "adaptive_min_clips": args.adaptive_min_clips,
+                    "adaptive_max_clips": args.adaptive_max_clips or None},
         )
 
 
@@ -139,6 +158,10 @@ def cache_split(
     crop_size: int = 256,
     crop_scale: float = 2.35,
     topk: int = 16,
+    adaptive_num_clips: bool = False,
+    adaptive_duration_col: str = "duration_s",
+    adaptive_min_clips: int = 1,
+    adaptive_max_clips: int | None = None,
 ) -> None:
     transform = make_transforms(
         training=False,
@@ -163,10 +186,15 @@ def cache_split(
         hand_crop=hand_crop,
         crop_size=crop_size,
         crop_scale=crop_scale,
+        adaptive_num_clips=adaptive_num_clips,
+        adaptive_duration_col=adaptive_duration_col,
+        adaptive_min_clips=adaptive_min_clips,
+        adaptive_max_clips=adaptive_max_clips,
     )
 
     embeddings: list[np.ndarray] = []
     labels: list[np.ndarray] = []
+    masks: list[np.ndarray] = []
     coverage: list[dict[str, float]] = []
     with torch.inference_mode():
         for batch_idx, data in enumerate(loader, start=1):
@@ -178,24 +206,35 @@ def cache_split(
             with torch.cuda.amp.autocast(dtype=torch.bfloat16, enabled=device.type == "cuda"):
                 tokens = encoder(clips, clip_indices)[0].float()
             seq = spatial_pool(tokens, spatial_tokens=spatial_tokens, pool=pool, topk=topk)
-            embeddings.append(seq.cpu().numpy().astype(np.float16))
+            token_mask = _token_mask_from_batch(data, seq, frames_per_clip, encoder.tubelet_size)
+            if token_mask is not None:
+                seq = seq.masked_fill(~token_mask.unsqueeze(-1), 0.0)
+            seq_np = seq.cpu().numpy().astype(np.float16)
+            if token_mask is None:
+                mask_np = np.ones(seq_np.shape[:2], dtype=bool)
+            else:
+                mask_np = token_mask.cpu().numpy().astype(bool)
+            for sample_seq, sample_mask in zip(seq_np, mask_np):
+                embeddings.append(sample_seq)
+                masks.append(sample_mask)
             labels.append(data[1].cpu().numpy().astype(np.int64))
             coverage.extend(_batch_coverage_rows(data[3]))
             if batch_idx % 10 == 0 or batch_idx == len(loader):
                 print(f"{out_path.name}: batch {batch_idx}/{len(loader)}", flush=True)
 
-    x = np.concatenate(embeddings, axis=0)
+    x, mask = _pad_sequences(embeddings, masks)
     y = np.concatenate(labels, axis=0)
     np.savez_compressed(
         out_path,
         x=x,
         y=y,
+        mask=mask,
         coverage=np.asarray([json.dumps(row) for row in coverage]),
         config=json.dumps(config),
         temporal_length=np.asarray([x.shape[1]], dtype=np.int64),
         input_dim=np.asarray([x.shape[2]], dtype=np.int64),
     )
-    print(f"wrote {out_path} x={x.shape} y={y.shape}")
+    print(f"wrote {out_path} x={x.shape} y={y.shape} valid_tokens={mask.sum(axis=1).tolist()[:5]}...")
 
 
 def spatial_pool(tokens: torch.Tensor, spatial_tokens: int, pool: str, topk: int = 16) -> torch.Tensor:
@@ -240,6 +279,41 @@ def _batch_coverage_rows(batch_coverage: Any) -> list[dict[str, float]]:
                 row[key] = float(value)
         rows.append(row)
     return rows
+
+
+def _token_mask_from_batch(
+    data: Any,
+    seq: torch.Tensor,
+    frames_per_clip: int,
+    tubelet_size: int,
+) -> torch.Tensor | None:
+    if len(data) < 5:
+        return None
+    maybe_mask = data[-1]
+    if not (torch.is_tensor(maybe_mask) and maybe_mask.dtype == torch.bool and maybe_mask.ndim == 2):
+        return None
+    temporal_tokens_per_clip = frames_per_clip // tubelet_size
+    token_mask = maybe_mask.repeat_interleave(temporal_tokens_per_clip, dim=1)
+    if token_mask.shape != seq.shape[:2]:
+        raise ValueError(f"token_mask shape {tuple(token_mask.shape)} does not match seq shape {tuple(seq.shape[:2])}")
+    return token_mask.to(device=seq.device)
+
+
+def _pad_sequences(
+    sequences: list[np.ndarray],
+    masks: list[np.ndarray],
+) -> tuple[np.ndarray, np.ndarray]:
+    if not sequences:
+        raise ValueError("No embeddings were produced")
+    max_t = max(seq.shape[0] for seq in sequences)
+    dim = sequences[0].shape[1]
+    x = np.zeros((len(sequences), max_t, dim), dtype=np.float16)
+    mask = np.zeros((len(sequences), max_t), dtype=bool)
+    for idx, (seq, seq_mask) in enumerate(zip(sequences, masks)):
+        t = seq.shape[0]
+        x[idx, :t] = seq
+        mask[idx, :t] = seq_mask
+    return x, mask
 
 
 if __name__ == "__main__":

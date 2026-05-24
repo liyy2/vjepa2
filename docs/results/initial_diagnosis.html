@@ -1,0 +1,528 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>V-JEPA 2.1 → UPDRS hand-task severity — diagnosis</title>
+<style>
+  :root{
+    --bg:#0f1115; --panel:#171a21; --panel2:#1f232c; --line:#2a2f3a;
+    --text:#e7eaf0; --muted:#9ba3b3; --accent:#7cc4ff; --accent2:#a78bfa;
+    --good:#65d6a4; --warn:#f0b86b; --bad:#ef6f6c; --crit:#d85572;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--text);
+    font:14.5px/1.55 -apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",
+         Inter,system-ui,sans-serif;
+    -webkit-font-smoothing:antialiased}
+  code,pre,.mono{font-family:"SF Mono","JetBrains Mono",Menlo,Consolas,
+    "Liberation Mono",monospace; font-size:0.92em}
+  .wrap{max-width:1080px;margin:0 auto;padding:48px 32px 96px}
+  header{margin-bottom:32px}
+  h1{font-size:28px;font-weight:600;letter-spacing:-0.01em;margin:0 0 8px}
+  h2{font-size:20px;font-weight:600;letter-spacing:-0.005em;margin:48px 0 16px;
+     padding-bottom:8px;border-bottom:1px solid var(--line)}
+  h3{font-size:15px;font-weight:600;margin:0 0 8px;color:var(--text)}
+  h4{font-size:13px;font-weight:600;margin:14px 0 6px;color:var(--muted);
+     text-transform:uppercase;letter-spacing:0.06em}
+  p{margin:0 0 12px}
+  .subtitle{color:var(--muted);font-size:15px;margin-top:6px}
+  .meta-row{display:flex;gap:16px;color:var(--muted);font-size:12.5px;
+    margin-top:12px;flex-wrap:wrap}
+  .meta-row span{padding:3px 10px;background:var(--panel);border:1px solid var(--line);
+    border-radius:999px}
+
+  .tldr{background:linear-gradient(180deg,#1b2030,#171b26);
+    border:1px solid #2a3550;border-radius:14px;padding:22px 24px;margin:20px 0 8px}
+  .tldr h3{color:#cfe4ff;margin-bottom:10px;font-size:16px}
+  .tldr p{margin:6px 0;color:#d6dde9}
+  .tldr .kbd{background:#0d1320;border:1px solid #2a3550;
+    padding:1px 6px;border-radius:6px;color:#cfe4ff}
+
+  .grid{display:grid;gap:14px}
+  .grid-2{grid-template-columns:1fr 1fr}
+  .grid-3{grid-template-columns:repeat(3,1fr)}
+  @media (max-width: 800px){.grid-2,.grid-3{grid-template-columns:1fr}}
+
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+    padding:16px 18px}
+  .card .label{color:var(--muted);font-size:11.5px;text-transform:uppercase;
+    letter-spacing:0.08em;margin-bottom:6px}
+  .card .value{font-size:24px;font-weight:600;letter-spacing:-0.01em}
+  .card .delta{font-size:12.5px;color:var(--muted);margin-top:4px}
+  .delta.good{color:var(--good)} .delta.bad{color:var(--bad)}
+
+  table{width:100%;border-collapse:collapse;font-size:13.5px;margin:6px 0}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);
+    vertical-align:top}
+  th{color:var(--muted);font-weight:500;font-size:12px;text-transform:uppercase;
+    letter-spacing:0.06em}
+  td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+  tr:last-child td{border-bottom:none}
+
+  .cause{border:1px solid var(--line);border-radius:12px;background:var(--panel);
+    margin:12px 0;overflow:hidden}
+  .cause-head{display:flex;align-items:center;gap:14px;padding:14px 18px;
+    border-bottom:1px solid var(--line);background:var(--panel2)}
+  .rank{font-family:"SF Mono",Menlo,monospace;font-size:13px;color:var(--muted);
+    width:24px;text-align:center}
+  .cause-title{flex:1;font-weight:600;font-size:15px}
+  .pill{font-size:11px;padding:3px 9px;border-radius:999px;font-weight:600;
+    letter-spacing:0.04em;text-transform:uppercase}
+  .pill.crit{background:#3a1820;color:#ffb3bf;border:1px solid #5a2030}
+  .pill.high{background:#3a2818;color:#ffcc96;border:1px solid #5a3a20}
+  .pill.med {background:#2a2a18;color:#e6e09a;border:1px solid #44440a}
+  .pill.low {background:#182a22;color:#9ad9b5;border:1px solid #1f4030}
+  .cause-body{padding:14px 18px}
+  .cause-body p{margin:6px 0}
+  .cause-body .ref{color:var(--muted);font-size:12.5px;margin-top:8px}
+  .cause-body code{background:#0d1018;padding:1px 6px;border-radius:5px;
+    border:1px solid var(--line);font-size:12.5px}
+
+  .conf{display:inline-grid;grid-template-columns:repeat(6,auto);gap:2px;
+    font-size:12.5px;font-variant-numeric:tabular-nums}
+  .conf .corner,.conf .head{color:var(--muted);font-size:11px;padding:6px 4px;
+    text-align:center;font-weight:500}
+  .conf .cell{min-width:34px;height:30px;display:flex;align-items:center;
+    justify-content:center;border-radius:4px;color:#0d1018;font-weight:600}
+  .conf-legend{color:var(--muted);font-size:12px;margin-top:6px}
+
+  .rec{display:flex;align-items:flex-start;gap:14px;padding:14px 16px;
+    border:1px solid var(--line);border-radius:10px;background:var(--panel);
+    margin:8px 0}
+  .rec .num{font-family:"SF Mono",Menlo,monospace;color:var(--accent);
+    font-size:14px;font-weight:600;width:22px;text-align:center;padding-top:2px}
+  .rec-body{flex:1}
+  .rec-body strong{color:#cfe4ff}
+  .rec-body .where{color:var(--muted);font-size:12.5px;margin-top:4px;display:block}
+
+  .twocol{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media (max-width:800px){.twocol{grid-template-columns:1fr}}
+
+  .ratio-bar{display:flex;align-items:center;gap:10px;margin:6px 0}
+  .ratio-bar .lbl{width:140px;color:var(--muted);font-size:12px}
+  .ratio-bar .track{flex:1;height:8px;background:#0d1018;border-radius:4px;
+    overflow:hidden;border:1px solid var(--line)}
+  .ratio-bar .fill{height:100%;border-radius:4px}
+  .ratio-bar .val{font-variant-numeric:tabular-nums;font-size:12.5px;
+    color:var(--text);width:120px;text-align:right}
+
+  .swatch{display:inline-block;width:10px;height:10px;border-radius:3px;
+    vertical-align:middle;margin-right:6px}
+
+  footer{margin-top:64px;color:var(--muted);font-size:12px;
+    border-top:1px solid var(--line);padding-top:16px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>V-JEPA 2.1 → UPDRS hand-task severity</h1>
+  <div class="subtitle">Why the attentive-probing pipeline is not learning, and what to do about it.</div>
+  <div class="meta-row">
+    <span>item 3.4 finger tapping</span>
+    <span>fold 0 · 248 train / 66 val</span>
+    <span>frozen V-JEPA 2.1 ViT-L 384</span>
+    <span class="mono">vjepa2 branch: vjepa2_1</span>
+  </div>
+</header>
+
+<div class="tldr">
+  <h3>TL;DR</h3>
+  <p>The probe head <em>does</em> extract ordinal signal from V-JEPA features — Spearman runs
+  <span class="kbd">0.30 → 0.51</span>. But at decision time it collapses to majority class:
+  <span class="kbd">val_acc ≈ 33 %</span>, <span class="kbd">QWK ≈ 0</span>. Meanwhile a
+  hand-crafted LightGBM/ExtraTrees baseline on the same fold gets
+  <span class="kbd">acc 68 %</span>, <span class="kbd">QWK 0.79</span>. Signal is in the data; this
+  pipeline isn't recovering it.</p>
+  <p>The root cause is a stack: a <strong>49 M-parameter probe</strong> on
+  <strong>248 training samples</strong>, a multi-clip aggregation that silently
+  <strong>departed from Meta's recipe</strong>, and an <strong>effective global batch size of 3</strong>.</p>
+</div>
+
+<h2>1. What the runs actually show</h2>
+
+<div class="grid grid-3">
+  <div class="card">
+    <div class="label">Best val_acc seen</div>
+    <div class="value">39.4 %</div>
+    <div class="delta bad">vs majority baseline ≈ 33 %</div>
+  </div>
+  <div class="card">
+    <div class="label">Best val Spearman</div>
+    <div class="value">0.51</div>
+    <div class="delta good">significant ordinal signal in head outputs</div>
+  </div>
+  <div class="card">
+    <div class="label">Best val QWK</div>
+    <div class="value">0.32</div>
+    <div class="delta bad">baseline gets 0.79 on the same fold</div>
+  </div>
+  <div class="card">
+    <div class="label">Train acc by epoch 16</div>
+    <div class="value">56 %</div>
+    <div class="delta bad">val flat at 36 % — overfitting</div>
+  </div>
+  <div class="card">
+    <div class="label">Probe params</div>
+    <div class="value">49.34 M</div>
+    <div class="delta bad">≈ 200 k params / training sample</div>
+  </div>
+  <div class="card">
+    <div class="label">Effective global batch</div>
+    <div class="value">3</div>
+    <div class="delta bad">Meta's SSv2 recipe uses 256</div>
+  </div>
+</div>
+
+<h3 style="margin-top:28px">Per-run scoreboard (item 3.4, fold 0)</h3>
+<table>
+  <thead>
+    <tr>
+      <th>Run</th>
+      <th class="num">epoch</th>
+      <th class="num">val_acc</th>
+      <th class="num">Spearman</th>
+      <th class="num">QWK</th>
+      <th class="num">MAE</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr><td>ddp3 (CORN, default aug)</td><td class="num">16</td><td class="num">36.4</td><td class="num">0.25</td><td class="num">0.26</td><td class="num">0.88</td></tr>
+    <tr><td>CORN dense (pos4096)</td><td class="num">2</td><td class="num">34.8</td><td class="num">0.28</td><td class="num">0.15</td><td class="num">0.92</td></tr>
+    <tr><td>softmax dense</td><td class="num">1</td><td class="num">30.3</td><td class="num">0.32</td><td class="num">0.02</td><td class="num">0.80</td></tr>
+    <tr><td>softmax balanced (no smooth)</td><td class="num">1</td><td class="num">36.4</td><td class="num">0.32</td><td class="num">0.15</td><td class="num">0.86</td></tr>
+    <tr><td>softmax no-aug</td><td class="num">1</td><td class="num">30.3</td><td class="num">0.12</td><td class="num">0.00</td><td class="num">0.79</td></tr>
+    <tr><td>softmax no-aug no-crop</td><td class="num">1</td><td class="num">30.3</td><td class="num">0.12</td><td class="num">0.00</td><td class="num">0.79</td></tr>
+    <tr><td>statsmeta balanced</td><td class="num">4</td><td class="num">33.3</td><td class="num">0.36</td><td class="num">0.19</td><td class="num">0.94</td></tr>
+    <tr><td>statsmeta scaled (×32)</td><td class="num">7</td><td class="num">30.3</td><td class="num">0.39</td><td class="num">0.00</td><td class="num">0.79</td></tr>
+    <tr style="background:#1a2535;border-top:1px solid #2a3550"><td><strong>Kinematic baseline (ExtraTrees)</strong></td><td class="num">—</td><td class="num"><strong>68.2</strong></td><td class="num">—</td><td class="num"><strong>0.79</strong></td><td class="num"><strong>0.33</strong></td></tr>
+  </tbody>
+</table>
+
+<h3 style="margin-top:24px">The collapse, visually</h3>
+<p>Best confusion matrix from the softmax-balanced run after epoch 1. The model only emits
+classes 0 and 1; classes 2, 3, 4 are never predicted even though they're 41 % of val.</p>
+
+<div class="conf" id="conf-matrix"></div>
+<div class="conf-legend">rows = true label · columns = predicted label · darker = more counts</div>
+
+<h2>2. Class distribution: the label space is uneven</h2>
+<p>Item 3.4, fold 0 — class counts:</p>
+<div class="twocol">
+  <div class="card">
+    <h4>Train (248)</h4>
+    <div id="train-dist"></div>
+  </div>
+  <div class="card">
+    <h4>Val (66)</h4>
+    <div id="val-dist"></div>
+  </div>
+</div>
+<p style="margin-top:10px;color:var(--muted);font-size:13px">
+  Train has <strong>zero</strong> class-4 examples in fold 0. The CORN threshold-3 logit
+  (predicting <span class="mono">y &gt; 3</span>) never sees a positive during training, and
+  "balanced" softmax assigns class-4 a weight of zero. Item 3.5 has no class-4 in any fold.
+</p>
+
+<h2>3. Config drift vs Meta's reference recipe</h2>
+<table>
+  <thead>
+    <tr><th>Knob</th><th>Meta SSv2 (vitl-384)</th><th>PD configs</th><th>Effect</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>batch_size per GPU</td><td>4</td><td>1</td><td>noisier per-step gradients</td></tr>
+    <tr><td>nodes × tasks</td><td>8 × 8 = 64 GPUs</td><td>1 × 2–3 = 2–3 GPUs</td><td><strong>global batch 256 → 3</strong></td></tr>
+    <tr><td>num_segments</td><td>2</td><td>12</td><td>more clips per video</td></tr>
+    <tr><td>num_views_per_segment</td><td>3</td><td>1</td><td><strong>logit averaging disabled</strong></td></tr>
+    <tr><td>frames_per_clip · stride</td><td>16 · 4</td><td>32 · 1</td><td>denser temporal sampling</td></tr>
+    <tr><td>num_classes</td><td>174</td><td>5</td><td>(expected)</td></tr>
+    <tr><td>LR sweep range</td><td>5e-3 → 1e-4</td><td>3e-3 → 1e-4</td><td>top of sweep diverges at batch 3</td></tr>
+    <tr><td>WD sweep range</td><td>0.01 → 0.8</td><td>0.01 → 0.4</td><td>(close enough)</td></tr>
+    <tr><td>wrapper use_pos_embed</td><td>false</td><td>true</td><td>retrofitted for 12-clip token concat</td></tr>
+    <tr><td>max_frames</td><td>128</td><td>4096</td><td>follows from 12 × 32-frame concat</td></tr>
+    <tr><td>num_epochs</td><td>20</td><td>40</td><td>more chances to overfit</td></tr>
+  </tbody>
+</table>
+
+<h3 style="margin-top:20px">Capacity ÷ data — the headline ratio</h3>
+<div id="ratio-bars"></div>
+<p style="color:var(--muted);font-size:12.5px;margin-top:10px">
+  Same probe architecture, ~900× more parameters per training sample than the regime
+  Meta's hyperparameters were tuned for.
+</p>
+
+<h2>4. Root causes, ranked</h2>
+
+<div class="cause">
+  <div class="cause-head">
+    <div class="rank">#1</div>
+    <div class="cause-title">49 M-parameter probe trained on 248 samples</div>
+    <span class="pill crit">critical</span>
+  </div>
+  <div class="cause-body">
+    <p>The 4-block <code>AttentiveClassifier</code> / <code>CORNAttentiveClassifier</code> has
+    <strong>49.34 M trainable params</strong>. Meta tuned it on SSv2 (~220 k clips). Your
+    fold-0 train has 248 clips → <strong>~200 k params per training sample, ~900× Meta's ratio</strong>.</p>
+    <p>The stats head (1.58 M params) gets the best Spearman you've recorded (0.51) — exactly
+    what an over-parameterization story predicts.</p>
+    <p class="ref">files: <code>src/heads/corn_head.py</code> · <code>src/models/attentive_pooler.py</code></p>
+  </div>
+</div>
+
+<div class="cause">
+  <div class="cause-head">
+    <div class="rank">#2</div>
+    <div class="cause-title">Multi-clip aggregation drifted from Meta's spec</div>
+    <span class="pill crit">critical</span>
+  </div>
+  <div class="cause-body">
+    <p>Spec (§3 of <code>foundation_model_minimal_hand_tasks.md</code>) and Meta both say:
+    <em>K independent encoder passes → K probe outputs → average <strong>logits</strong></em>.</p>
+    <p>Current pipeline instead token-concatenates all 12 segments along the temporal axis
+    into one ~110 k-token sequence, runs the probe <strong>once</strong>, then averages
+    softmax over <code>num_views_per_segment = 1</code> (i.e. no averaging at all).</p>
+    <p>Consequences: the probe self-attends over 110 k tokens; temporal structure has to be
+    discovered from a sinusoidal pos-embed stamped on the fly; the regularizing piece of
+    Meta's recipe (logit averaging across K clips) never fires.</p>
+    <p class="ref">files: <code>evals/video_classification_frozen/modelcustom/vit_encoder_multiclip_vjepa21.py:103–149</code>
+      · <code>evals/video_classification_frozen/eval.py:571</code></p>
+  </div>
+</div>
+
+<div class="cause">
+  <div class="cause-head">
+    <div class="rank">#3</div>
+    <div class="cause-title">Effective global batch size is 3</div>
+    <span class="pill high">high</span>
+  </div>
+  <div class="cause-body">
+    <p>Meta SSv2: <code>batch=4 × 8 nodes × 8 tasks = 256</code>. All PD configs:
+    <code>batch=1, nodes=1, tasks_per_node=3 → 3</code>. The LR/WD sweep was calibrated for
+    batch 256; running <code>lr=3e-3, wd=0.4</code> at batch 3 is on the edge of divergence
+    and explains the noisy per-epoch jumps in <code>fold_0_ddp3</code>.</p>
+    <p class="ref">file: <code>configs/eval_2_1/pd_hand_item_3_4_*.yaml</code></p>
+  </div>
+</div>
+
+<div class="cause">
+  <div class="cause-head">
+    <div class="rank">#4</div>
+    <div class="cause-title">Class 4 essentially absent; class 3 rare</div>
+    <span class="pill high">high</span>
+  </div>
+  <div class="cause-body">
+    <p>Item 3.4 fold-0 train: <code>0=77, 1=86, 2=66, 3=19, 4=0</code>. CORN's threshold-3
+    logit never sees a positive in training; balanced softmax gives class-4 weight 0. Item 3.5 has
+    zero class-4 samples anywhere.</p>
+    <p>You're asking a 5-level CORN to model what is effectively a 4-class label space.</p>
+    <p class="ref">file: <code>splits/item_3_4/fold_0_train.csv</code></p>
+  </div>
+</div>
+
+<div class="cause">
+  <div class="cause-head">
+    <div class="rank">#5</div>
+    <div class="cause-title">CORN loss is unmasked</div>
+    <span class="pill med">medium</span>
+  </div>
+  <div class="cause-body">
+    <p><code>corn_loss</code> applies BCE to <em>all</em> K-1 thresholds for every sample.
+    The Cao et al. 2020 CORN the spec calls out is <em>conditional</em>: threshold j only gets
+    gradient from samples with <code>y &gt; t_{j-1}</code>.</p>
+    <p>Without the mask, you've built CORAL without the shared-weight constraint — the
+    rank-monotonicity guarantee is gone, and the easier high-threshold tasks dilute gradient
+    on the hard ones.</p>
+    <p class="ref">file: <code>src/losses/corn_loss.py:35</code></p>
+  </div>
+</div>
+
+<div class="cause">
+  <div class="cause-head">
+    <div class="rank">#6</div>
+    <div class="cause-title">SSv2-tuned augmentation is destructive at this data scale</div>
+    <span class="pill med">medium</span>
+  </div>
+  <div class="cause-body">
+    <p><code>make_dataloader</code> defaults: <code>random_resize_scale=(0.08, 1.0)</code>,
+    <code>auto_augment=true</code>, <code>reprob=0.25</code>. A 0.08-scale crop on a 384²
+    frame is 109² pixels — almost certainly drops the hand entirely.</p>
+    <p>Your <em>noaug_nocrop</em> run did not actually move the needle (30 % vs 36 %) so this
+    is not the dominant cause, but combined with #1 and #2 it pushes things further.</p>
+    <p class="ref">file: <code>evals/video_classification_frozen/eval.py:997–1015</code></p>
+  </div>
+</div>
+
+<div class="cause">
+  <div class="cause-head">
+    <div class="rank">#7</div>
+    <div class="cause-title">Head selection bias over 12 LR/WD heads on 66 val samples</div>
+    <span class="pill low">minor</span>
+  </div>
+  <div class="cause-body">
+    <p><code>_best_metric_index</code> picks the top val metric across 12 classifiers. With
+    per-head val noise ≈ 6 pp on 66 samples, "best of 12" biases the headline number upward
+    by ~1–2 points. Small but worth knowing when comparing variants.</p>
+    <p class="ref">file: <code>evals/video_classification_frozen/eval.py:816–821</code></p>
+  </div>
+</div>
+
+<h2>5. Recommendations, in priority order</h2>
+
+<div class="rec">
+  <div class="num">1</div>
+  <div class="rec-body">
+    <strong>Bound the feature ceiling first.</strong> Run frozen backbone → global average
+    pool → single linear → CE. If that can't clear majority baseline + Spearman ~0.4, the
+    issue is the V-JEPA features themselves and no probe tweak will save you.
+    <span class="where">one new config; ~30 minutes to launch</span>
+  </div>
+</div>
+
+<div class="rec">
+  <div class="num">2</div>
+  <div class="rec-body">
+    <strong>Restore Meta's logit-averaging recipe.</strong> Either (a) drop to
+    <code>num_segments=2, num_views_per_segment=3</code> like SSv2 and remove the temporal
+    token-concat from <code>ClipAggregation</code>, or (b) change
+    <code>multiviews_postprocess</code> to return one tensor per (clip × view) so the probe
+    runs K times and <code>eval.py:571</code> actually averages K softmaxes.
+    <span class="where">touches the wrapper that drifted in the first place</span>
+  </div>
+</div>
+
+<div class="rec">
+  <div class="num">3</div>
+  <div class="rec-body">
+    <strong>Cap the LR sweep.</strong> At global batch 3, the
+    <code>lr ∈ {1e-3, 3e-3}</code> rows are not useful — try
+    <code>lr ∈ {3e-4, 1e-4} × wd ∈ {0.01, 0.1}</code> only. Fewer heads, cleaner pick.
+    <span class="where">config-only change</span>
+  </div>
+</div>
+
+<div class="rec">
+  <div class="num">4</div>
+  <div class="rec-body">
+    <strong>Make the CORN loss conditional</strong> per Cao et al. 2020 (mask sample
+    <em>i</em> out of threshold <em>j</em>'s BCE when <code>label_i ≤ j</code>). Three lines
+    in <code>src/losses/corn_loss.py</code>.
+    <span class="where">restores the rank-monotonicity guarantee</span>
+  </div>
+</div>
+
+<div class="rec">
+  <div class="num">5</div>
+  <div class="rec-body">
+    <strong>Collapse the label space to 0–3.</strong> Merge class 4 into class 3 (or drop the
+    handful of class-4 clips). Document the choice; a 5-level CORN over zero class-4 training
+    samples is misleading.
+    <span class="where">data manifest change in the sister project</span>
+  </div>
+</div>
+
+<div class="rec">
+  <div class="num">6</div>
+  <div class="rec-body">
+    <strong>Until logit-averaging is back, set <code>random_clip_sampling=False</code> for
+    train.</strong> With token-concat and global batch 3, per-step gradient noise is
+    dominated by random clip offsets per epoch.
+    <span class="where">flag in the dataset_kwargs / clip dataset</span>
+  </div>
+</div>
+
+<p style="margin-top:20px;color:var(--muted);font-size:13px">
+  The minimal-divergence principle in <code>CLAUDE.local.md</code> still holds. Item 2 is
+  <em>restoring</em> Meta's recipe, not deviating from it — the current
+  <code>ClipAggregation</code> is itself a silent deviation.
+</p>
+
+<footer>
+  Generated 2026-05-20 · sources: <code>configs/eval_2_1/pd_hand_item_3_4_*.yaml</code>,
+  <code>evals/video_classification_frozen/eval.py</code>,
+  <code>evals/video_classification_frozen/modelcustom/vit_encoder_multiclip_vjepa21.py</code>,
+  <code>src/heads/{corn_head,stats_head}.py</code>,
+  <code>src/losses/corn_loss.py</code>,
+  <code>src/datasets/clip_dataset.py</code>,
+  <code>outputs/foundation_model_minimal_hand_tasks/vjepa2_evals/item_3_4/*</code>,
+  <code>outputs/foundation_model_minimal_hand_tasks/kinematic_baselines/item_3_4/fold_0/</code>.
+</footer>
+
+</div>
+
+<script>
+  // -- confusion matrix render (softmax-balanced-nosmooth, epoch 1, best classifier) --
+  const cm = [
+    [15, 4, 0, 0, 0],
+    [11, 9, 0, 0, 0],
+    [ 5,17, 0, 0, 0],
+    [ 3, 1, 0, 0, 0],
+    [ 1, 0, 0, 0, 0],
+  ];
+  const cmMax = Math.max(...cm.flat());
+  const mount = document.getElementById('conf-matrix');
+  // header row
+  mount.appendChild(Object.assign(document.createElement('div'),{className:'corner',textContent:''}));
+  for(let c=0;c<5;c++){
+    const h = document.createElement('div'); h.className='head'; h.textContent='p='+c; mount.appendChild(h);
+  }
+  for(let r=0;r<5;r++){
+    const lh = document.createElement('div'); lh.className='head'; lh.textContent='t='+r; mount.appendChild(lh);
+    for(let c=0;c<5;c++){
+      const v=cm[r][c]; const t=v/(cmMax||1);
+      const cell=document.createElement('div'); cell.className='cell';
+      // ramp from dark→bright
+      const hue = 210; const sat = 70;
+      const lt = 18 + t*68;
+      cell.style.background = `hsl(${hue},${sat}%,${lt}%)`;
+      cell.style.color = lt>50 ? '#0d1018' : '#cfe4ff';
+      cell.textContent = v;
+      mount.appendChild(cell);
+    }
+  }
+
+  // -- distribution bars --
+  function distBars(target, counts, total, color){
+    const max = Math.max(...counts);
+    const tgt = document.getElementById(target);
+    counts.forEach((c,i)=>{
+      const row = document.createElement('div'); row.className='ratio-bar';
+      const lbl = document.createElement('div'); lbl.className='lbl';
+      lbl.innerHTML = `<span class="swatch" style="background:${color}"></span>class ${i}`;
+      const track = document.createElement('div'); track.className='track';
+      const fill = document.createElement('div'); fill.className='fill';
+      fill.style.background = color; fill.style.width = (100*c/max)+'%';
+      track.appendChild(fill);
+      const v = document.createElement('div'); v.className='val';
+      const pct = total? (100*c/total).toFixed(1) : '0';
+      v.textContent = `${c} (${pct}%)`;
+      row.appendChild(lbl); row.appendChild(track); row.appendChild(v);
+      tgt.appendChild(row);
+    });
+  }
+  distBars('train-dist',[77,86,66,19,0],248,'#7cc4ff');
+  distBars('val-dist',  [19,20,22, 4,1], 66,'#a78bfa');
+
+  // -- params-per-sample bars --
+  const ratios = [
+    {name:'Meta SSv2 (vitl-384)', p_per_s: 49.34e6/220000, total:'49.3M / 220k', color:'#65d6a4'},
+    {name:'PD item 3.4 fold 0',   p_per_s: 49.34e6/248,    total:'49.3M / 248',  color:'#ef6f6c'},
+  ];
+  const maxR = Math.max(...ratios.map(r=>r.p_per_s));
+  const rmount = document.getElementById('ratio-bars');
+  ratios.forEach(r=>{
+    const row = document.createElement('div'); row.className='ratio-bar';
+    const lbl = document.createElement('div'); lbl.className='lbl'; lbl.textContent=r.name;
+    const track = document.createElement('div'); track.className='track';
+    const fill = document.createElement('div'); fill.className='fill';
+    fill.style.background = r.color; fill.style.width = (100*r.p_per_s/maxR)+'%';
+    track.appendChild(fill);
+    const v = document.createElement('div'); v.className='val';
+    v.textContent = `${Math.round(r.p_per_s).toLocaleString()} params/sample`;
+    row.appendChild(lbl); row.appendChild(track); row.appendChild(v);
+    rmount.appendChild(row);
+  });
+</script>
+</body>
+</html>

@@ -118,13 +118,22 @@ class ClipAggregation(nn.Module):
         output_dim=None,
         max_frames=128,
         use_pos_embed=False,
+        clip_batch_size=None,
+        pool_tokens=None,
+        return_segment_outputs=False,
     ):
         super().__init__()
         self.model = model
         self.tubelet_size = tubelet_size
-        self.embed_dim = embed_dim = int(output_dim or model.embed_dim)
+        self.token_embed_dim = embed_dim = int(output_dim or model.embed_dim)
         self.num_heads = model.num_heads
         self._warned_dynamic_pos_embed = False
+        self.clip_batch_size = int(clip_batch_size) if clip_batch_size else None
+        if isinstance(pool_tokens, bool):
+            pool_tokens = "mean" if pool_tokens else None
+        self.pool_tokens = pool_tokens
+        self.return_segment_outputs = bool(return_segment_outputs)
+        self.embed_dim = self._pooled_embed_dim(embed_dim)
 
         self.pos_embed = None
         if use_pos_embed:
@@ -134,6 +143,29 @@ class ClipAggregation(nn.Module):
             self.pos_embed = nn.Parameter(torch.zeros(1, max_T, embed_dim), requires_grad=False)
             sincos = get_1d_sincos_pos_embed(embed_dim, max_T)
             self.pos_embed.copy_(torch.from_numpy(sincos).float().unsqueeze(0))
+
+    def _pooled_embed_dim(self, embed_dim):
+        if self.pool_tokens in {"mean", "avg", "average"}:
+            return embed_dim
+        if self.pool_tokens in {"mean_std", "mean+std"}:
+            return 2 * embed_dim
+        if self.pool_tokens in {"mean_std_max", "mean+std+max"}:
+            return 3 * embed_dim
+        return embed_dim
+
+    def _pool_tokens(self, x):
+        if self.pool_tokens in {"mean", "avg", "average"}:
+            return x.mean(dim=1, keepdim=True)
+        if self.pool_tokens in {"mean_std", "mean+std"}:
+            mean = x.mean(dim=1)
+            std = x.float().std(dim=1, unbiased=False).to(dtype=x.dtype)
+            return torch.cat([mean, std], dim=1).unsqueeze(1)
+        if self.pool_tokens in {"mean_std_max", "mean+std+max"}:
+            mean = x.mean(dim=1)
+            std = x.float().std(dim=1, unbiased=False).to(dtype=x.dtype)
+            max_values = x.max(dim=1).values
+            return torch.cat([mean, std, max_values], dim=1).unsqueeze(1)
+        return x
 
     def _pos_embed_for_length(self, length, device, dtype):
         if self.pos_embed is not None and length <= self.pos_embed.shape[1]:
@@ -158,7 +190,16 @@ class ClipAggregation(nn.Module):
         x = [torch.cat(xi, dim=0) for xi in x]
         x = torch.cat(x, dim=0)
 
-        outputs = self.model(x)
+        if self.clip_batch_size and x.size(0) > self.clip_batch_size:
+            outputs = torch.cat(
+                [
+                    self.model(xi)
+                    for xi in torch.split(x, self.clip_batch_size, dim=0)
+                ],
+                dim=0,
+            )
+        else:
+            outputs = self.model(x)
 
         def multiviews_postprocess(outputs):
             _, N, D = outputs.size()
@@ -166,6 +207,28 @@ class ClipAggregation(nn.Module):
             S = N // T
 
             eff_B = B * num_views_per_clip
+            if self.return_segment_outputs:
+                segment_outputs = []
+                for i in range(num_clips):
+                    o = outputs[i * eff_B : (i + 1) * eff_B]
+                    for j in range(num_views_per_clip):
+                        outputs_ij = o[j * B : (j + 1) * B]
+                        if (self.pos_embed is not None) and (clip_indices is not None):
+                            raw_indices = clip_indices[i][:, :: self.tubelet_size]
+                            temporal_indices = (raw_indices // self.tubelet_size).long()
+                            max_index = int(temporal_indices.max().item())
+                            pos_embed = self._pos_embed_for_length(
+                                max_index + 1,
+                                device=outputs_ij.device,
+                                dtype=outputs_ij.dtype,
+                            ).repeat(B, 1, 1)
+                            pos_embed = apply_masks(pos_embed, [temporal_indices], concat=False)[0]
+                            pos_embed = pos_embed.unsqueeze(2).repeat(1, 1, S, 1)
+                            outputs_ij = outputs_ij + pos_embed.flatten(1, 2)
+                        outputs_ij = self._pool_tokens(outputs_ij)
+                        segment_outputs.append(outputs_ij)
+                return segment_outputs
+
             all_outputs = [[] for _ in range(num_views_per_clip)]
             for i in range(num_clips):
                 o = outputs[i * eff_B : (i + 1) * eff_B]
@@ -192,6 +255,7 @@ class ClipAggregation(nn.Module):
                     pos_embed = pos_embed.unsqueeze(2).repeat(1, 1, S, 1)
                     pos_embed = pos_embed.flatten(1, 2)
                     outputs_i += pos_embed
+                outputs_i = self._pool_tokens(outputs_i)
                 all_outputs[i] = outputs_i
 
             return all_outputs

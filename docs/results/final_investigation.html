@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>V-JEPA 2.1 + LoRA on PD Item 3.4 — Final Investigation</title>
+<style>
+  :root { --ink:#1a1a1a; --line:#d8d8d8; --soft:#f7f7f5; --warn:#fff8e1; --good:#e8f5e8; --bad:#fde6e6; --info:#eef4fb; --accent:#1a4d8a; }
+  body { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; max-width:1100px; margin:24px auto; padding:0 18px 60px; color:var(--ink); line-height:1.55; }
+  h1 { border-bottom:3px solid var(--ink); padding-bottom:8px; font-size:1.9em; }
+  h2 { margin-top:38px; color:var(--accent); border-bottom:1px solid var(--line); padding-bottom:4px; font-size:1.4em; }
+  h3 { margin-top:22px; color:#333; font-size:1.1em; }
+  table { border-collapse:collapse; width:100%; margin:14px 0; font-size:0.92em; }
+  th,td { border:1px solid var(--line); padding:7px 10px; text-align:left; vertical-align:top; }
+  th { background:var(--soft); }
+  td.num { text-align:right; font-variant-numeric:tabular-nums; }
+  tr.best td { background:var(--good); font-weight:600; }
+  tr.baseline td { background:var(--warn); }
+  tr.regression td { background:var(--bad); }
+  tr.flat td { background:#fcf3d9; }
+  code { background:var(--soft); padding:1px 5px; border-radius:3px; font-size:0.88em; font-family:ui-monospace,"SF Mono",Menlo,monospace; }
+  blockquote { border-left:4px solid var(--accent); background:var(--info); padding:10px 16px; margin:14px 0; color:#2a3e5a; }
+  .pill { display:inline-block; padding:2px 9px; border-radius:11px; font-size:0.78em; font-weight:600; text-transform:uppercase; letter-spacing:0.04em; }
+  .pill.win { background:var(--good); color:#1d5b1d; }
+  .pill.loss { background:var(--bad); color:#7a1a1a; }
+  .pill.flat { background:#fcf3d9; color:#7a5500; }
+  .num-big { font-size:1.4em; font-weight:600; font-variant-numeric:tabular-nums; }
+  .gap-bad { color:#b22222; font-weight:600; }
+  .gap-good { color:#1a7f1a; font-weight:600; }
+  .footnote { color:#666; font-size:0.85em; margin-top:30px; padding-top:12px; border-top:1px solid var(--line); }
+</style>
+</head>
+<body>
+
+<h1>V-JEPA 2.1 + LoRA on PD Item 3.4 — Final Investigation</h1>
+
+<p><strong>Mission:</strong> Beat the v5 kinematic-features LightGBM baseline (<strong>QWK 0.7906, acc 0.6818</strong>) on fold 0 of MDS-UPDRS finger-tap severity scoring, with the constraint <em>V-JEPA 2.1 features + LoRA + handcrop only, no kinematic features, single fold</em>.</p>
+
+<p><strong>Best result achieved:</strong> <span class="num-big">QWK 0.7331 / acc 0.6061 / MAE 0.4242</span> from a greedy K=4 ensemble of stats-MLP classifiers over <em>top-K spatial pooled V-JEPA 2.1 features + shorter-SFT LoRA-adapted</em>. <span class="gap-bad">Gap to kinematic baseline: −0.058 QWK, −0.076 acc.</span></p>
+
+<p>Best <em>single</em> model: QWK 0.6764 / acc 0.4848. The ensemble lift came from combining mean-pool and top-K pool feature views — different spatial-aggregation views give complementary signal.</p>
+
+<h2>Top-line evolution</h2>
+<table>
+<tr>
+  <th>Stage</th>
+  <th class="num">Single QWK</th>
+  <th class="num">Ensemble QWK</th>
+  <th class="num">Ensemble acc</th>
+  <th>Notes</th>
+</tr>
+<tr class="baseline"><td><strong>Kinematic baseline (target)</strong></td><td class="num">—</td><td class="num"><strong>0.7906</strong></td><td class="num"><strong>0.6818</strong></td><td>v5 hand-crafted features + LightGBM</td></tr>
+<tr><td>Original (loose-crop, no LoRA bug fixes)</td><td class="num">0.6519</td><td class="num">~0.68</td><td class="num">~0.55</td><td>Where we started</td></tr>
+<tr><td>LoRA wide-frame, loose crop (no fix)</td><td class="num">0.6398</td><td class="num">0.6519</td><td class="num">0.5758</td><td>No gain</td></tr>
+<tr><td>+ preprocessing bug fixes (median-wrist tight crop, side swap)</td><td class="num">0.6764</td><td class="num">0.6884</td><td class="num">0.5152</td><td>Best single across all runs</td></tr>
+<tr><td>+ all 3 LoRA sweeps combined (mean-pool features)</td><td class="num">0.6764</td><td class="num">0.7233</td><td class="num">0.5758</td><td>+0.07 from ensemble diversity</td></tr>
+<tr class="best"><td><strong>+ top-K pool features added to ensemble</strong></td><td class="num">0.6764</td><td class="num"><strong>0.7331</strong></td><td class="num"><strong>0.6061</strong></td><td>Best ensemble. MAE 0.4242 (lowest)</td></tr>
+</table>
+
+<h2>All experiments and verdicts</h2>
+<table>
+<tr><th>#</th><th>Experiment</th><th>Single QWK</th><th>Ensemble QWK</th><th>Verdict</th></tr>
+<tr><td>0</td><td>Frozen V-JEPA loose-crop</td><td class="num">0.6519</td><td class="num">~0.68</td><td>Baseline</td></tr>
+<tr><td>1</td><td>LoRA r=8 wide-frame, loose crop</td><td class="num">0.6398</td><td class="num">0.6519</td><td><span class="pill loss">no gain</span></td></tr>
+<tr><td>2</td><td>Preprocessing bug fixes (median-wrist crop, side swap)</td><td class="num">—</td><td class="num">—</td><td><span class="pill win">needed</span> (cosine sim 0.958→0.889)</td></tr>
+<tr class="best"><td>3</td><td>LoRA tight-handcrop, 20 epochs (best regime)</td><td class="num"><strong>0.6764</strong></td><td class="num">0.6884</td><td><span class="pill win">best single</span></td></tr>
+<tr class="regression"><td>4</td><td>Longer SFT (50 ep, peak lr 2e-4)</td><td class="num">0.6401</td><td class="num">0.6605</td><td><span class="pill loss">hurt</span> — JEPA loss 0.42→0.36, but classifier worse</td></tr>
+<tr><td>5</td><td>LoRA r=16 (more capacity)</td><td class="num">—</td><td class="num">—</td><td><span class="pill loss">aborted</span> — early signal worse</td></tr>
+<tr class="flat"><td>6</td><td>Temporal-aware JEPA masking (<code>temporal_scale=0.5</code>)</td><td class="num">0.6474</td><td class="num">0.6961</td><td><span class="pill flat">flat</span> — within-sweep ensemble climbs, combined no gain</td></tr>
+<tr><td>7</td><td>Frozen V-JEPA + tight handcrop (control)</td><td class="num">0.6474</td><td class="num">~0.66</td><td>Confirms LoRA helps</td></tr>
+<tr class="regression"><td>8</td><td>Transformer classifier head (3 layers)</td><td class="num">0.4687</td><td class="num">—</td><td><span class="pill loss">overfit</span> on 248 samples</td></tr>
+<tr class="regression"><td>9</td><td>MSE regression (continuous 0–4)</td><td class="num">0.5387</td><td class="num">—</td><td><span class="pill loss">worse</span> — predictions can't span class 4</td></tr>
+<tr class="regression"><td>10</td><td>Meta attentive probe (4-block + cross-attn)</td><td class="num">—</td><td class="num">—</td><td><span class="pill loss">too slow</span> — 28h ETA; killed</td></tr>
+<tr class="regression"><td>11</td><td>Handcrop-only features (no nocrop concat)</td><td class="num">0.5892</td><td class="num">—</td><td><span class="pill loss">worse</span> — nocrop adds useful context</td></tr>
+<tr class="regression"><td>12</td><td>Cosine LR scheduler in classifier</td><td class="num">0.6340</td><td class="num">—</td><td><span class="pill loss">hurt</span> — decayed too fast pre-best-epoch</td></tr>
+<tr class="best"><td>13</td><td><strong>Top-K spatial pool (K=16 active tokens per tubelet)</strong></td><td class="num">0.6608</td><td class="num"><strong>0.7331</strong></td><td><span class="pill win">best ensemble</span> — complementary to mean-pool</td></tr>
+<tr class="regression"><td>14</td><td>Supervised LoRA fine-tuning (8 ep end-to-end, attentive head)</td><td class="num">~0.47</td><td class="num">—</td><td><span class="pill loss">overfit</span> — class-2 collapsed to class-1</td></tr>
+</table>
+
+<h2>Error analysis driving the work (1120 trained classifiers, 568 saved val_probs)</h2>
+<table>
+<tr><th>Category</th><th class="num">% of val (n=66)</th><th>What it means</th></tr>
+<tr><td>Consistent-right (mode_frac &gt; 60%, correct)</td><td class="num">38%</td><td>Already solved</td></tr>
+<tr><td><strong>Consistent-wrong (most models agree on WRONG)</strong></td><td class="num"><strong>39%</strong></td><td><strong>FEATURE-level failure</strong> — features can't distinguish</td></tr>
+<tr><td>Uncertain (split predictions)</td><td class="num">23%</td><td>Classifier struggles</td></tr>
+</table>
+<p>Mean p(correct) by true class: 0.524 (class 0) → 0.379 (1) → 0.363 (2) → 0.278 (3) → 0.000 (1 class-4 sample). Model detects "normal" but cannot resolve <strong>adjacent severity grades</strong>. 86% of errors are off-by-one.</p>
+
+<h2>Why this gap persists</h2>
+<ol>
+<li><strong>Single-model QWK plateaus at 0.6764</strong> across 1120 trained classifiers, regardless of head architecture, loss, or feature source. The features themselves are the ceiling.</li>
+<li><strong>Reducing JEPA SFT loss makes the classifier worse</strong>. The masked-prediction objective is misaligned with severity discrimination — better reconstruction ≠ better task features.</li>
+<li><strong>Supervised LoRA fine-tuning also failed</strong> (QWK 0.47) — overfitting on 248 training clips. Model collapsed onto class 1.</li>
+<li><strong>Error pattern is class-adjacency confusion</strong>, exactly where fine-grained motion features (joint angles, tap rate) would help and where the kinematic baseline wins by construction.</li>
+</ol>
+
+<blockquote>
+<strong>Bottom line:</strong> 314 unique clips total, fold-0 train has 248 of them. V-JEPA's general visual features can't easily recover finger-tap kinematics from this little data. The kinematic baseline's MediaPipe-derived joint angles + velocities encode the discriminating signal directly; we have to learn it from scratch through a video encoder.
+</blockquote>
+
+<h2>Where the gain came from (what to keep)</h2>
+<ol>
+<li><strong>Two preprocessing bug fixes</strong> in <code>src/datasets/clip_dataset.py</code> — median-wrist tight crop + camera/patient side swap. Reduced handcrop-vs-nocrop cosine sim from 0.958 to 0.889. Single biggest input-quality fix.</li>
+<li><strong>Five upstream codebase bug fixes</strong> (eval encoder-key fallback, anneal-mode auto-resume, load gate, DDP <code>.module</code> unwrap in metadata branch, short-video bounds guard).</li>
+<li><strong>Top-K spatial pooling</strong> (K=16 most-active tokens per tubelet) — added to <code>scripts/pd_hand/cache_vjepa21_temporal_embeddings.py</code>. Complementary to mean-pool. Best ensemble drew from both.</li>
+<li><strong>Shorter-SFT LoRA encoder weights</strong> at <code>vjepa2_jepa_lora_adapt/.../fold_0_vitl384_32f_step1_rank8_handcrop/latest.pth.tar</code>. The best LoRA-adapted V-JEPA for fold 0.</li>
+</ol>
+
+<h2>What would actually close the −0.058 QWK gap (each violates a stated constraint)</h2>
+<table>
+<tr><th>Direction</th><th>Why it would help</th><th>Constraint violated</th></tr>
+<tr><td>Add MediaPipe-derived kinematic features (tap rate, amplitude, regularity)</td><td>Directly encodes severity signal</td><td><em>"no kinematic features"</em></td></tr>
+<tr><td>Multi-modal: V-JEPA + kinematic concat</td><td>V-JEPA gives visual context, kinematics give the signal</td><td><em>"no kinematic features"</em></td></tr>
+<tr><td>5-fold ensemble (one model per fold, predict all)</td><td>5× effective training data</td><td><em>"single fold testing"</em></td></tr>
+<tr><td>Full encoder fine-tune (not just LoRA)</td><td>More params adapt to task</td><td><em>"use LoRA"</em></td></tr>
+<tr><td>MediaPipe-landmark-guided spatial attention over V-JEPA tokens</td><td>Focuses on fingertip patches</td><td>Borderline — uses MediaPipe for localization, not as feature</td></tr>
+</table>
+
+<p class="footnote">Subject IDs <code>Y####</code>; no patient names or raw video frames committed. All metrics on fold 0 val (n=66). Local view-only HTML.</p>
+
+</body>
+</html>

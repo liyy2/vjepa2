@@ -204,8 +204,13 @@ def main(args, resume_preempt=False):
     loss_reg_std_mult = cfgs_opt.get("loss_reg_std_mult", None)
     loss_reg_num_tracking_steps = cfgs_opt.get("loss_reg_num_tracking_steps", 300)
     loss_reg_min_epoch = cfgs_opt.get("loss_reg_min_epoch", 50)
+    clip_microbatch_size = int(cfgs_opt.get("clip_microbatch_size", 0) or 0)
     if loss_reg_std_mult is not None:
         logger.info("Loss regulation activated")
+        if clip_microbatch_size > 0:
+            raise ValueError("clip_microbatch_size is not supported with loss_reg_std_mult")
+    if clip_microbatch_size > 0:
+        logger.info(f"Using clip_microbatch_size={clip_microbatch_size}")
     # ----------------------------------------------------------------------- #
 
     np.random.seed(seed)
@@ -307,6 +312,7 @@ def main(args, resume_preempt=False):
         torch.cuda.set_device(device)
 
     # -- log/checkpointing paths
+    os.makedirs(folder, exist_ok=True)
     log_file = os.path.join(folder, f"log_r{rank}.csv")
     latest_file = "latest.pth.tar"
     latest_path = os.path.join(folder, latest_file)
@@ -665,14 +671,14 @@ def main(args, resume_preempt=False):
                                 new_h.append(F.layer_norm(hi, (hi.size(-1),)))
                         return new_h
 
-                def forward_context(clips, embed_dim=embed_dim_encoder):
+                def forward_context(clips_i, masks_enc_i, masks_pred_i, embed_dim=embed_dim_encoder):
                     modality = "video"
                     if img_temporal_dim_size is not None:
-                        if clips[0].shape[2] == img_temporal_dim_size:
+                        if clips_i[0].shape[2] == img_temporal_dim_size:
                             modality = "image"
-                    z = encoder(clips, masks_enc, gram_mode=False, training_mode=True)
+                    z = encoder(clips_i, masks_enc_i, gram_mode=False, training_mode=True)
                     z_pred, z_context = predictor(
-                        z, masks_enc, masks_pred, mod=modality
+                        z, masks_enc_i, masks_pred_i, mod=modality
                     )
                     if normalize_predictor:
                         z_pred = normalize_nested(z_pred, embed_dim)
@@ -729,64 +735,96 @@ def main(args, resume_preempt=False):
                             loss /= n
                             return loss
 
-                # Step 1. Forward
-                with torch.cuda.amp.autocast(dtype=dtype, enabled=mixed_precision):
-                    h = forward_target(clips)
-                    z_pred, z_context = forward_context(clips)
+                def compute_loss(clips_i, masks_enc_i, masks_pred_i):
+                    h = forward_target(clips_i)
+                    z_pred, z_context = forward_context(clips_i, masks_enc_i, masks_pred_i)
                     loss = 0
                     loss_pred = loss_fn(
-                        z_pred, h, masks_pred, cls_loss=has_cls_first, d_weights=None
+                        z_pred, h, masks_pred_i, cls_loss=has_cls_first, d_weights=None
                     )
                     loss += loss_pred
 
                     # Context loss
                     if predict_all:
                         distance_weights = compute_mask_distance(
-                            masks_pred, masks_enc, grid_size, offset_context_loss
+                            masks_pred_i, masks_enc_i, grid_size, offset_context_loss
                         )
                         if weight_distance_loss:
                             d_weights = distance_weights
                         else:
                             d_weights = None
                         loss_context = loss_fn(
-                            z_context, h, masks_enc, cls_loss=False, d_weights=d_weights
+                            z_context, h, masks_enc_i, cls_loss=False, d_weights=d_weights
                         )
                         if lambda_progressive:
                             lambda_value_step = lambda_sched.value(epoch * ipe + itr)
                         else:
                             lambda_value_step = lambda_value
                         loss += loss_context * lambda_value_step
+                    return loss
 
                 # Step 2. Backward & step
                 run_step = True
-                if loss_reg_std_mult is not None:
-                    meanval = np.mean(trailing_losses)
-                    stdval = np.std(trailing_losses)
-                    max_bound = meanval + loss_reg_std_mult * stdval
-                    if (
-                        loss > max_bound
-                        and epoch > loss_reg_min_epoch
-                        and len(trailing_losses)
-                        > int(0.5 * loss_reg_num_tracking_steps)
-                    ):
-                        run_step = False
-                        loss.backward()
-                        logger.info(
-                            f"Loss {loss} is above bound {meanval} + {loss_reg_std_mult} * {stdval}. Skipping step."
-                        )
-
-                if run_step:
+                use_clip_microbatch = clip_microbatch_size > 0 and len(clips) > clip_microbatch_size
+                optimizer.zero_grad(set_to_none=True)
+                if use_clip_microbatch:
+                    loss_value = 0.0
+                    num_clip_batches = len(clips)
+                    for start in range(0, num_clip_batches, clip_microbatch_size):
+                        end = min(start + clip_microbatch_size, num_clip_batches)
+                        chunk_weight = float(end - start) / float(num_clip_batches)
+                        with torch.cuda.amp.autocast(dtype=dtype, enabled=mixed_precision):
+                            chunk_loss = compute_loss(
+                                clips[start:end],
+                                masks_enc[start:end],
+                                masks_pred[start:end],
+                            )
+                            weighted_loss = chunk_loss * chunk_weight
+                        if mixed_precision:
+                            scaler.scale(weighted_loss).backward()
+                        else:
+                            weighted_loss.backward()
+                        loss_value += float(chunk_loss.detach()) * chunk_weight
                     if mixed_precision:
-                        scaler.scale(loss).backward()
                         scaler.unscale_(optimizer)
-                    else:
-                        loss.backward()
-                    if mixed_precision:
                         scaler.step(optimizer)
                         scaler.update()
                     else:
                         optimizer.step()
-                optimizer.zero_grad()
+                else:
+                    # Step 1. Forward
+                    with torch.cuda.amp.autocast(dtype=dtype, enabled=mixed_precision):
+                        loss = compute_loss(clips, masks_enc, masks_pred)
+
+                    if loss_reg_std_mult is not None:
+                        meanval = np.mean(trailing_losses)
+                        stdval = np.std(trailing_losses)
+                        max_bound = meanval + loss_reg_std_mult * stdval
+                        if (
+                            loss > max_bound
+                            and epoch > loss_reg_min_epoch
+                            and len(trailing_losses)
+                            > int(0.5 * loss_reg_num_tracking_steps)
+                        ):
+                            run_step = False
+                            loss.backward()
+                            logger.info(
+                                f"Loss {loss} is above bound {meanval} + {loss_reg_std_mult} * {stdval}. Skipping step."
+                            )
+
+                    if run_step:
+                        if mixed_precision:
+                            scaler.scale(loss).backward()
+                            scaler.unscale_(optimizer)
+                        else:
+                            loss.backward()
+                        if mixed_precision:
+                            scaler.step(optimizer)
+                            scaler.update()
+                        else:
+                            optimizer.step()
+                    loss_value = float(loss.detach())
+                optimizer.zero_grad(set_to_none=True)
 
                 # Step 3. momentum update of target encoder
                 m = min(next(momentum_scheduler), ema[1])
@@ -802,7 +840,7 @@ def main(args, resume_preempt=False):
                     torch._foreach_add_(params_k, params_q, alpha=1 - m)
 
                 return (
-                    float(loss),
+                    loss_value,
                     _new_lr,
                     _new_wd,
                     run_step,

@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>V-JEPA 2.1 + LoRA — PD Item 3.4 — Final progress vs kinematic baseline</title>
+<style>
+  body { font-family: -apple-system, system-ui, sans-serif; max-width: 1150px; margin: 24px auto; padding: 0 16px; color: #1a1a1a; line-height: 1.55; }
+  h1 { border-bottom: 2px solid #333; padding-bottom: 6px; }
+  h2 { margin-top: 32px; color: #333; border-bottom: 1px solid #ccc; padding-bottom: 4px; }
+  h3 { margin-top: 20px; color: #555; }
+  table { border-collapse: collapse; margin: 12px 0; width: 100%; font-size: 0.92em; }
+  th, td { border: 1px solid #bbb; padding: 6px 10px; text-align: left; vertical-align: top; }
+  th { background: #eef; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  tr.best td { background: #e9ffe9; font-weight: bold; }
+  tr.baseline td { background: #fffbe6; }
+  tr.regression td { background: #ffeeee; color: #7a1a1a; }
+  .ok { color: #1a7f1a; font-weight: bold; }
+  .bad { color: #b22222; font-weight: bold; }
+  .meh { color: #b27a00; font-weight: bold; }
+  code { background: #f3f3f3; padding: 1px 4px; border-radius: 3px; font-size: 0.9em; }
+  pre { background: #f5f5f5; padding: 10px; border-radius: 4px; overflow-x: auto; font-size: 0.85em; }
+  blockquote { border-left: 4px solid #4477aa; background: #f0f5fa; padding: 8px 14px; margin: 12px 0; }
+  .gap { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 0.85em; font-weight: bold; background: #fbe9e9; color: #7a1a1a; }
+  .status { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 0.85em; font-weight: bold; }
+  .status.done { background: #c4f1c4; color: #1a4d1a; }
+  .status.fail { background: #fbe9e9; color: #7a1a1a; }
+  .status.flat { background: #fceec4; color: #7a4a00; }
+</style>
+</head>
+<body>
+
+<h1>V-JEPA 2.1 + LoRA on PD Item 3.4 — Final state</h1>
+
+<p><b>Goal:</b> beat the kinematic-feature LightGBM baseline (acc 0.682 / QWK 0.7906) on fold 0 of MDS-UPDRS finger-tap severity scoring, using only V-JEPA 2.1 features + LoRA + handcrop (no kinematic features).</p>
+
+<p><b>Final result:</b> <span class="meh">best ensemble QWK 0.7233 (acc 0.5758) — <span class="gap">−0.067 below baseline QWK, −0.106 below baseline acc</span></span>. We did not surpass the baseline. 1120+ classifier models trained across several SFT regimes; the feature ceiling under current constraints sits around QWK 0.72.</p>
+
+<h2>Result table</h2>
+
+<table>
+<tr>
+  <th>Setup</th>
+  <th class="num">Best single QWK</th>
+  <th class="num">Best single acc</th>
+  <th class="num">Best ensemble QWK</th>
+  <th class="num">Best ensemble acc</th>
+  <th>Verdict</th>
+</tr>
+
+<tr class="baseline"><td><b>Kinematic LightGBM baseline (target)</b></td><td class="num">—</td><td class="num">—</td><td class="num">0.7906</td><td class="num">0.6818</td><td>—</td></tr>
+
+<tr><td>Frozen V-JEPA, loose-crop, velocity sweep (original)</td><td class="num">0.6519</td><td class="num">0.5606</td><td class="num">~0.68</td><td class="num">~0.55</td><td>Pre-existing baseline</td></tr>
+
+<tr><td>LoRA (wide-frame, loose-crop) — first attempt</td><td class="num">0.6398</td><td class="num">0.5606</td><td class="num">0.6519</td><td class="num">0.5758</td><td>No gain over frozen</td></tr>
+
+<tr class="best"><td><b>LoRA (handcrop trained, tight-crop) — best regime</b></td><td class="num">0.6764</td><td class="num">0.4848</td><td class="num">0.6884</td><td class="num">0.5152</td><td>Best single across all runs</td></tr>
+
+<tr class="best"><td><b>Combined ensemble (3 LoRA sweeps, ~568 models)</b></td><td class="num">0.6764</td><td class="num">0.4848</td><td class="num"><b>0.7233</b></td><td class="num"><b>0.5758</b></td><td>Best ensemble across all runs</td></tr>
+
+<tr class="regression"><td>LoRA longer SFT (50 ep, peak lr 2e-4)</td><td class="num">0.6401</td><td class="num">0.4394</td><td class="num">0.6605</td><td class="num">0.5152</td><td><span class="status fail">Hurt</span> — better JEPA loss ≠ better features</td></tr>
+
+<tr class="regression"><td>LoRA temporal-aware mask (temporal_scale=0.5)</td><td class="num">0.6474</td><td class="num">0.4697</td><td class="num">0.6961</td><td class="num">0.5152</td><td><span class="status flat">Flat</span> — within-sweep ensemble slightly up but combined no gain</td></tr>
+
+<tr class="regression"><td>Frozen V-JEPA + tight handcrop (no LoRA)</td><td class="num">0.6474</td><td class="num">0.5152</td><td class="num">~0.66</td><td class="num">—</td><td>Inferior to LoRA — LoRA does help</td></tr>
+
+<tr class="regression"><td>Transformer classifier head (3 layers, d=64)</td><td class="num">0.4687</td><td class="num">0.4242</td><td class="num">—</td><td class="num">—</td><td>Overfit fast on 248 samples</td></tr>
+
+<tr class="regression"><td>MSE regression (continuous score, rounded)</td><td class="num">0.5387</td><td class="num">0.4545</td><td class="num">—</td><td class="num">—</td><td>Worse than CE on this data</td></tr>
+
+<tr class="regression"><td>Handcrop-only features (no nocrop concat)</td><td class="num">0.5892</td><td class="num">0.4091</td><td class="num">—</td><td class="num">—</td><td>Nocrop provides useful context</td></tr>
+
+<tr class="regression"><td>Cosine LR scheduler in stats-MLP classifier</td><td class="num">0.6340</td><td class="num">0.4394</td><td class="num">—</td><td class="num">—</td><td>Decayed LR too fast → underfit</td></tr>
+
+</table>
+
+<h2>What worked</h2>
+
+<h3>1) Two preprocessing-pipeline bug fixes (silent killers)</h3>
+<ul>
+<li><b>Loose torso "hand crop"</b>: <code>crop_scale=2.35</code> + <code>crop_size=256</code> + bbox aggregated over all frames → crop covered ~32% of frame on average (up to 68%). Rewrote <code>_mediapipe_hand_bbox</code> to use the <b>median wrist position</b> with a fixed-size box. Reduced cosine-sim between handcrop and nocrop features from <b>0.958 → 0.889</b>.</li>
+<li><b>Patient/camera handedness mismatch</b>: MediaPipe labels hands from the camera's perspective; the manifest <code>side</code> is from the patient's. We were silently picking the wrong hand for every clip. Fixed by inverting the side query.</li>
+</ul>
+
+<h3>2) Five codebase bugs you flagged</h3>
+<ul>
+<li><code>vit_encoder_multiclip_vjepa21.py</code>: now tries <code>ema_encoder → target_encoder → encoder</code> in order, so LoRA checkpoints load cleanly without manual key override.</li>
+<li><code>app/vjepa_2_1/train.py:317</code>: anneal mode now auto-resumes from <code>latest.pth.tar</code> if present (instead of silently re-annealing from scratch on SLURM rerun).</li>
+<li><code>app/vjepa_2_1/train.py:493</code>: load gate is now <code>load_model AND load_path is not None</code> — <code>load_checkpoint: false</code> actually means no load even with a stale <code>latest.pth.tar</code>.</li>
+<li><code>evals/.../eval.py:705</code> (<code>_classifier_forward</code>): unwraps DDP <code>.module</code> before <code>getattr(..., "metadata_dim")</code> — was silently dropping metadata under DDP.</li>
+<li><code>src/datasets/clip_dataset.py</code>: guards <code>len(vr) &lt; max(frame_step, num_clips)</code> early-return — prevents <code>partition_len=0</code> → <code>np.clip(..., 0, -1)</code> producing −1 indices.</li>
+</ul>
+
+<h3>3) Handcrop-LoRA short SFT (20 ep)</h3>
+<p>The bug-fix + short SFT is the best feature regime. Single-model best 0.6764, all-handcrop ensemble 0.7233 — meaningful gains over the original wide-frame baseline (~0.65). Adding handcrop-LoRA features ≈ +0.07 QWK to the ensemble.</p>
+
+<h2>What didn't work (and why)</h2>
+
+<h3>Longer SFT (50 epochs, peak LR 2e-4 → 1e-7)</h3>
+<p>JEPA reconstruction loss got 15% better (0.42 → 0.36) but downstream classifier QWK <span class="bad">dropped</span> from 0.6764 → 0.6401 single, 0.6884 → 0.6605 ensemble. <b>The JEPA reconstruction objective is misaligned with severity discrimination.</b> Higher peak LR pushed LoRA further from V-JEPA's well-trained general features.</p>
+
+<h3>Temporal-aware JEPA masking (<code>temporal_scale=0.5</code>)</h3>
+<p>Hypothesis was that masking partial frames within blocks (vs whole-frame blocks) would force the LoRA to learn temporal/motion dynamics rather than spatial reconstruction. Result: <span class="meh">flat</span>. Within-sweep ensemble crept up to 0.6961 but combined cross-sweep ensemble did not gain (0.7033 vs 0.7233 prior best).</p>
+
+<h3>Larger classifier head (Transformer encoder, 3 layers d=128)</h3>
+<p>With 248 training samples the Transformer (0.6M params) overfits — peak val QWK 0.4687 at epoch 9, then degrades. Stats-MLP (0.5M params, handcrafted velocity / FFT / per-segment stats) holds up because the inductive bias matches the periodic tap signal.</p>
+
+<h3>MSE regression instead of CE/CORN</h3>
+<p>Hoped that penalizing off-by-2 more than off-by-1 would align with QWK and reduce the systematic under-prediction of severity. Got QWK 0.5387 — worse than CE 0.6764. The model can't reach class 4 from regression: predicted range only spans [-0.20, 3.49].</p>
+
+<h3>Meta's attentive probe (4-block transformer with cross-attention)</h3>
+<p>The project's "minimal divergence" spec calls for this head. Ran the full <code>evals/main.py</code> pipeline on cached features. Wall-clock was ~10 sec/iter (MediaPipe per-batch handcrop is CPU-bound), implying ~28 hrs for 40 epochs. Not viable inside the time budget. Killed at epoch 0.</p>
+
+<h3>Frozen V-JEPA + tight handcrop (no LoRA)</h3>
+<p>Best single QWK 0.6474 — clearly below the LoRA-adapted runs. Confirms that the handcrop-LoRA SFT is doing real work, even if modest.</p>
+
+<h3>LR scheduler in classifier</h3>
+<p>Added warmup-cosine. Hurt. Cosine decayed LR too fast for the early-stopping pattern of the classifier — the model usually finds its best epoch around 30 of 80, but by then LR was already at 30% of peak. Reverted to constant LR.</p>
+
+<h2>Error analysis (1120 trained models)</h2>
+
+<p>Aggregated per-sample prediction across all 568 stored val_probs:</p>
+
+<table>
+<tr><th>Category</th><th class="num">Count / 66</th><th>Interpretation</th></tr>
+<tr><td>Consistent-right (most models predict correct, mode_frac > 60%)</td><td class="num">25 (38%)</td><td>Already solved</td></tr>
+<tr><td><b>Consistent-wrong (most models predict same wrong answer)</b></td><td class="num"><b>26 (39%)</b></td><td><b>FEATURE-level failure</b> — features don't encode the distinguishing signal</td></tr>
+<tr><td>Uncertain (predictions split across classes)</td><td class="num">15 (23%)</td><td>Classifier struggles</td></tr>
+</table>
+
+<p><b>Avg p(correct) by true class</b> — model's confidence that the right answer was right:</p>
+<table>
+<tr><th>True class</th><th class="num">n</th><th class="num">avg p(correct)</th><th class="num">consistent-wrong</th></tr>
+<tr><td>0 (normal)</td><td class="num">19</td><td class="num">0.524</td><td class="num">5</td></tr>
+<tr><td>1 (slight)</td><td class="num">20</td><td class="num">0.379</td><td class="num">9</td></tr>
+<tr><td>2 (mild)</td><td class="num">22</td><td class="num">0.363</td><td class="num">8</td></tr>
+<tr><td>3 (moderate)</td><td class="num">4</td><td class="num">0.278</td><td class="num">3</td></tr>
+<tr><td>4 (severe)</td><td class="num">1</td><td class="num">0.000</td><td class="num">1</td></tr>
+</table>
+
+<p>The model can distinguish "normal" from "severe" but cannot resolve <b>adjacent severity grades</b> (0↔1, 1↔2, 2↔3). 86% of errors are off-by-one. The high-severity tail (classes 3, 4) is systematically under-predicted because there are only 5 such examples in val and the model never sees enough variation to anchor them.</p>
+
+<h2>Why the gap persists</h2>
+
+<p>Three pieces of evidence point at the same conclusion:</p>
+<ol>
+<li><b>Single-model QWK plateaus at 0.6764 across 1120 trained classifiers</b>, regardless of head architecture (stats-MLP, Transformer), loss (CE, CORN, MSE), or feature source (frozen / LoRA variants).</li>
+<li><b>Reducing JEPA SFT loss makes classifier worse</b>, not better — the masked-prediction objective is not aligned with severity discrimination.</li>
+<li><b>The error pattern is class-adjacency confusion</b>, exactly where fine-grained motion features would help and where the kinematic baseline (which encodes finger-joint angles + velocities directly) wins.</li>
+</ol>
+
+<p>Under the current constraint (<b>V-JEPA 2.1 features + LoRA, no kinematic features</b>), there is no realistic path past ~QWK 0.72 on this 314-clip dataset with only fold 0 to fit. The kinematic baseline's advantage is fundamental: MediaPipe-derived joint angles and velocities are exactly the signal severity grading depends on; V-JEPA's general visual features can't easily recover this from 248 finger-tap clips.</p>
+
+<h2>What would actually close the gap (and what constraint each violates)</h2>
+
+<table>
+<tr><th>Direction</th><th>Why it would help</th><th>Constraint violated</th></tr>
+<tr><td>Add MediaPipe-derived kinematic features (tap rate, amplitude, regularity)</td><td>Directly encodes the discriminating signal</td><td>"no additional kinematic feature"</td></tr>
+<tr><td>Multi-modal: V-JEPA + kinematic feature concat</td><td>V-JEPA adds visual context (e.g. tremor) the kinematics miss</td><td>"no additional kinematic feature"</td></tr>
+<tr><td>End-to-end supervised fine-tune of V-JEPA encoder (not LoRA-only)</td><td>More parameters to learn task-specific signal</td><td>"use LoRA"</td></tr>
+<tr><td>Add more SFT data — other UPDRS items or unrelated hand clips</td><td>Larger SSL corpus → richer hand features</td><td>Doesn't violate; would help, requires data sourcing</td></tr>
+<tr><td>5-fold ensemble (train per fold, predict on all)</td><td>More effective training data</td><td>"test one fold is enough"</td></tr>
+<tr><td>MediaPipe-landmark-guided spatial pooling of V-JEPA tokens</td><td>Focus features on fingertip-adjacent patches</td><td>Borderline — uses MediaPipe for localization only, not features</td></tr>
+</table>
+
+<h2>Code changes that should ship regardless</h2>
+
+<ol>
+<li><b>Two preprocessing bug fixes</b> in <code>src/datasets/clip_dataset.py</code> (tight median-wrist crop + camera/patient side swap). These are unconditionally correct.</li>
+<li><b>Five codebase fixes</b> you flagged (eval checkpoint-key fallback, anneal resume gate, load gate, DDP metadata unwrap, short-video bounds).</li>
+<li><b>Trained-encoder weights worth keeping</b>: handcrop-LoRA shorter SFT (e20). Path: <code>fold_0_vitl384_32f_step1_rank8_handcrop/latest.pth.tar</code> + merged variant. This is the best LoRA-adapted V-JEPA we have for fold 0.</li>
+</ol>
+
+<p style="margin-top: 32px; color: #888; font-size: 0.85em;">Subject IDs are <code>Y####</code>; no patient names or raw video frames committed. Local view-only HTML.</p>
+
+</body>
+</html>

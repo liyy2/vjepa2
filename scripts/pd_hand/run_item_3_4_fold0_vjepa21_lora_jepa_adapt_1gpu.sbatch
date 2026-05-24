@@ -1,19 +1,19 @@
 #!/bin/bash
-#SBATCH --job-name=vjepa_i34_f0_lora
+#SBATCH --job-name=vjepa_i34_f0_lora1
 #SBATCH --partition=gpu
 #SBATCH --nodes=1
-#SBATCH --ntasks=4
+#SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
-#SBATCH --gres=gpu:h100:4
-#SBATCH --mem=320G
+#SBATCH --gres=gpu:h100:1
+#SBATCH --mem=80G
 #SBATCH --time=1-00:00:00
-#SBATCH --output=/gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/vjepa2_jepa_lora_adapt/item_3_4/run_logs/lora_jepa_adapt_ddp4_%j.out
-#SBATCH --error=/gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/vjepa2_jepa_lora_adapt/item_3_4/run_logs/lora_jepa_adapt_ddp4_%j.err
+#SBATCH --output=/gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/vjepa2_jepa_lora_adapt/item_3_4/run_logs/lora_jepa_adapt_1gpu_%j.out
+#SBATCH --error=/gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks/vjepa2_jepa_lora_adapt/item_3_4/run_logs/lora_jepa_adapt_1gpu_%j.err
 
 set -euo pipefail
 
 REPO="${REPO:-/gpfs/milgram/pi/scherzer/yl2428/vjepa2}"
-CONFIG="${CONFIG:-${REPO}/configs/train_2_1/pd_hand/vitl384-lora-jepa-adapt-32f-step1-fold0-adaptive-windows.yaml}"
+CONFIG="${CONFIG:-${REPO}/configs/train_2_1/pd_hand/vitl384-lora-jepa-adapt-32f-step1-fold0-adaptive-windows-1gpu.yaml}"
 WANDB_API_KEY_FILE="${WANDB_API_KEY_FILE:-${REPO}/wandb_api.txt}"
 CONDA="${CONDA:-/gpfs/milgram/apps/avx2/software/miniconda/24.11.3/bin/conda}"
 CONDA_ENV="${CONDA_ENV:-video-llama}"
@@ -53,7 +53,6 @@ with open(os.environ["CONFIG"], "r", encoding="utf-8") as f:
 print("config_folder=" + str(cfg["folder"]))
 print("data_num_workers=" + str(cfg["data"].get("num_workers")))
 print("adaptive_num_clips=" + str(cfg["data"].get("dataset_kwargs", {}).get("adaptive_num_clips")))
-print("save_every_freq=" + str(cfg["meta"].get("save_every_freq")))
 print("clip_microbatch_size=" + str(cfg["optimization"].get("clip_microbatch_size")))
 print("wandb_enabled=" + str(cfg.get("wandb", {}).get("enabled")))
 PY
@@ -69,7 +68,7 @@ srun --ntasks="${SLURM_NTASKS}" \
   --kill-on-bad-exit=1 /bin/bash -lc '
 set -euo pipefail
 REPO="${REPO:-/gpfs/milgram/pi/scherzer/yl2428/vjepa2}"
-CONFIG="${CONFIG:-${REPO}/configs/train_2_1/pd_hand/vitl384-lora-jepa-adapt-32f-step1-fold0-adaptive-windows.yaml}"
+CONFIG="${CONFIG:-${REPO}/configs/train_2_1/pd_hand/vitl384-lora-jepa-adapt-32f-step1-fold0-adaptive-windows-1gpu.yaml}"
 CONDA="${CONDA:-/gpfs/milgram/apps/avx2/software/miniconda/24.11.3/bin/conda}"
 CONDA_ENV="${CONDA_ENV:-video-llama}"
 export REPO CONFIG CONDA CONDA_ENV

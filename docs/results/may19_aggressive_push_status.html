@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Aggressive push — may19 V-JEPA → kinematic parity</title>
+<style>
+  body { background: #fffdf8; color: #1a1a1a;
+         font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+         max-width: 1100px; margin: 36px auto; padding: 0 26px; line-height: 1.55; font-size: 15.5px; }
+  h1 { font-size: 27px; margin-bottom: 4px; }
+  h2 { font-size: 19px; margin-top: 36px; padding-bottom: 4px; border-bottom: 1px solid #d8d4cc; }
+  code { font-family: "JetBrains Mono", Menlo, monospace; font-size: 12.5px;
+         background: #faf7f0; padding: 1px 5px; border-radius: 3px; }
+  pre { font-family: "JetBrains Mono", Menlo, monospace; font-size: 12px; background: #faf7f0;
+        border: 1px solid #d8d4cc; border-radius: 4px; padding: 10px 14px; overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 13.5px; }
+  th { background: #f3efe5; text-align: left; font-weight: 600; }
+  th, td { border: 1px solid #d8d4cc; padding: 7px 11px; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  tr.target td { background: #e7f2eb; font-weight: 600; }
+  tr.peak td { background: #fff6e0; font-weight: 600; }
+  tr.running td { background: #eef3f7; }
+  tr.queued td { background: #faf7f0; color: #6a6a6a; }
+  .pill { display: inline-block; padding: 2px 9px; border-radius: 11px; font-size: 11px;
+          background: #f3efe5; color: #c9430b; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; }
+  .pill.good { background: #e7f2eb; color: #1f7a47; }
+  .pill.warn { background: #fff6e0; color: #8a6a00; }
+  .pill.bad { background: #fef0f0; color: #b22222; }
+  .pill.run { background: #eef3f7; color: #265e8a; animation: pulse 2s ease-in-out infinite; }
+  @keyframes pulse { 0%,100% { opacity:1 } 50% { opacity:0.55 } }
+  .callout { background: #f3efe5; border-left: 3px solid #c9430b; padding: 10px 16px; margin: 14px 0; font-size: 14px; }
+  .callout.good { background: #e7f2eb; border-left-color: #1f7a47; }
+</style>
+</head>
+<body>
+
+<h1>Aggressive push toward kinematic parity — live status</h1>
+<p style="color:#6a6a6a">Last updated 2026-05-22 ~17:00. Goal: pure V-JEPA QWK &gt; 0.7277 (kinematic LightGBM). Best so far: <strong>QWK 0.533</strong> (frozen tstats ensemble).</p>
+
+<h2>1. Live leaderboard (may19 fold 0, 107 val clips)</h2>
+
+<table>
+  <thead>
+    <tr><th>Rank</th><th>Approach</th><th class="num">QWK</th><th class="num">Acc</th><th class="num">MAE</th><th>Status</th></tr>
+  </thead>
+  <tbody>
+    <tr class="target"><td>—</td><td>Kinematic LightGBM (target)</td><td class="num">0.7277</td><td class="num">0.7196</td><td class="num">0.3551</td><td><span class="pill good">target</span></td></tr>
+    <tr class="peak"><td>1</td><td>V-JEPA tstats top-24 ensemble (frozen, dense12)</td><td class="num">0.5328</td><td class="num">0.4860</td><td class="num">0.6822</td><td><span class="pill warn">prior peak</span></td></tr>
+    <tr><td>2</td><td>V-JEPA tstats single (frozen, dense12)</td><td class="num">0.5151</td><td class="num">0.4766</td><td class="num">0.7290</td><td></td></tr>
+    <tr><td>3</td><td>V-JEPA combiner tiny d=128 (frozen, dense12)</td><td class="num">0.5103</td><td class="num">0.5234</td><td class="num">0.5701</td><td></td></tr>
+    <tr><td>4</td><td>V-JEPA combiner med d=192 L=3 (adaptive K_i, 800 ep)</td><td class="num">0.4968</td><td class="num">0.4860</td><td class="num">—</td><td><span class="pill run">sweep in progress</span></td></tr>
+    <tr><td>5</td><td>V-JEPA combiner tiny d=128 (adaptive K_i, 800 ep)</td><td class="num">0.4887</td><td class="num">0.4206</td><td class="num">—</td><td><span class="pill run">sweep in progress</span></td></tr>
+  </tbody>
+</table>
+
+<h2>2. What's changed since the last report</h2>
+
+<ul>
+  <li><strong>Bug fix in <code>src/datasets/clip_dataset.py</code>:</strong> the adaptive sampler used to collapse the last few starts to <code>max_start</code> when <code>num_clips × clip_len &gt; total_frames</code>, producing duplicate segments. Now uses <code>linspace(0, max_start, num_clips)</code> uniformly — works correctly for any clip length × num_clips combination.</li>
+  <li><strong>Adaptive caches:</strong> two completed (fine K_i = ⌈duration_s⌉ max 48; coarse step=2 max 24). One queued (dense96: min_clips=32, max_clips=96 — forces overlap on short clips).</li>
+  <li><strong>Aggressive LoRA-FT:</strong> rank 32, LoRA on attn.qkv + attn.proj + mlp.fc1 + mlp.fc2 (4× more params, +MLP coverage), 40 epochs, tighter crop (crop_scale 1.5). RUNNING. Epoch 2 still QWK 0 — collapse pattern, watching for recovery by epoch 6 (last LoRA-FT pattern).</li>
+  <li><strong>WandB enabled</strong> on all new sweeps (per user directive). The dense96 sweep will log to <code>pd-hand-vjepa2</code> project.</li>
+</ul>
+
+<h2>3. Running jobs (8 active / queued)</h2>
+
+<table>
+  <thead><tr><th>Job ID</th><th>Description</th><th>State</th><th>ETA</th></tr></thead>
+  <tbody>
+    <tr class="running"><td>28871314</td><td>Aggressive LoRA-FT (rank 32, +MLP, 40 epochs)</td><td><span class="pill run">running ep 2/40</span></td><td>~6h</td></tr>
+    <tr class="running"><td>28871309</td><td>Long combiner sweep on fine-adaptive cache (22 cfgs × 800 epochs)</td><td><span class="pill run">running, 9 results</span></td><td>~2h</td></tr>
+    <tr class="running"><td>28871310</td><td>tstats velocity grid (192 cfgs) on fine-adaptive cache</td><td><span class="pill run">running</span></td><td>~1h</td></tr>
+    <tr class="queued"><td>28871313</td><td>Multi-scale (fine+coarse adaptive) combiner sweep</td><td><span class="pill">queued (dep)</span></td><td>~3h</td></tr>
+    <tr class="queued"><td>28871315–17</td><td>Aggressive LoRA-FT → merge → cache → long sweep chain</td><td><span class="pill">queued (dep)</span></td><td>~10h</td></tr>
+    <tr class="queued"><td>28871318</td><td>tstats sweep on aggressive LoRA-FT adaptive cache</td><td><span class="pill">queued (dep)</span></td><td>~10h</td></tr>
+    <tr class="queued"><td>28873154</td><td>Dense96 cache (min=32, max=96 segments per clip) — denser than ⌈duration_s⌉</td><td><span class="pill">queued</span></td><td>~1h</td></tr>
+    <tr class="queued"><td>28873155</td><td>Combiner sweep on dense96 cache, 1000 epochs, <strong>WandB enabled</strong></td><td><span class="pill">queued (dep)</span></td><td>~4h</td></tr>
+  </tbody>
+</table>
+
+<h2>4. Adaptive-long sweep — current results (9 / 22 configs done)</h2>
+
+<table>
+  <thead><tr><th>Config</th><th class="num">QWK</th><th class="num">Acc</th><th>Notes</th></tr></thead>
+  <tbody>
+    <tr class="peak"><td>med_d192_l3_seed1</td><td class="num">0.4968</td><td class="num">0.4860</td><td>best so far</td></tr>
+    <tr><td>med_d192_l3_seed0</td><td class="num">0.4889</td><td class="num">0.4953</td><td></td></tr>
+    <tr><td>tiny_d128_l2_seed2</td><td class="num">0.4887</td><td class="num">0.4206</td><td></td></tr>
+    <tr><td>tiny_d128_l2_seed1</td><td class="num">0.4789</td><td class="num">0.4112</td><td></td></tr>
+    <tr><td>tiny_d128_l2_seed0</td><td class="num">0.4627</td><td class="num">0.5421</td><td></td></tr>
+    <tr><td>tiny_d128_l2_seed98</td><td class="num">0.4477</td><td class="num">0.4486</td><td></td></tr>
+    <tr><td>tiny_d128_l2_seed42</td><td class="num">0.4459</td><td class="num">0.4019</td><td></td></tr>
+    <tr><td>tiny_d128_l2_seed233</td><td class="num">0.4275</td><td class="num">0.5047</td><td></td></tr>
+    <tr><td>tiny_d128_l2_seed17</td><td class="num">0.4010</td><td class="num">0.4486</td><td></td></tr>
+  </tbody>
+</table>
+
+<p>Seed variance is ~0.05 QWK for tiny d=128. Medium d=192 L=3 is climbing — best 0.497. Still 3 medium seeds + 5 larger models (d=256 L=4, d=192 L=6, soft d=192) to go in this sweep.</p>
+
+<h2>5. Strategy</h2>
+
+<div class="callout">
+  <strong>Where we are.</strong> Frozen V-JEPA tops out at QWK ~0.53 regardless of head / pooling / adaptive coverage. The encoder fundamentally lacks the rhythm signal (negative R² predicting kinematic features). The path forward is forcing the encoder to encode rhythm: bigger LoRA + MLP modules + more epochs + tighter crop. That's the aggressive LoRA-FT chain currently running.
+</div>
+
+<p><strong>Next moves if aggressive LoRA-FT plateaus too:</strong></p>
+<ol>
+  <li>Direct kinematic regression as primary objective (currently aux). Cancel CORN head entirely, train V-JEPA encoder + linear head to regress the 14 kinematic scalars. Then plug predicted scalars into the same LightGBM that scores QWK 0.728 on the real ones.</li>
+  <li>Frame-difference input cache (Δframe as RGB channel) — motion is now the dominant signal in the input space.</li>
+  <li>JEPA SSL LoRA continuation on may19 train clips — different gradient signal, no label leak.</li>
+  <li>Ensemble of all best heads across all caches (combiner + tstats best of each cache, average probs).</li>
+</ol>
+
+<p style="color:#6a6a6a; font-size:12.5px; margin-top:30px;">
+  Status file refreshed periodically. Leaderboard tool: <code>scripts/pd_hand/may19_leaderboard.py</code>.
+  Combiner sweep summarizer: <code>scripts/pd_hand/summarize_combiner_sweep.py</code>.
+  Ensemble tool: <code>scripts/pd_hand/ensemble_combiner_sweep.py</code>.
+</p>
+
+</body>
+</html>

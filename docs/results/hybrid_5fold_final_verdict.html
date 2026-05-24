@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>5-fold leak-free hybrid: final verdict</title>
+<style>
+body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;max-width:880px;margin:2em auto;padding:0 1em;color:#222;line-height:1.55}
+h1{border-bottom:2px solid #333;padding-bottom:.3em}
+h2{margin-top:1.6em;color:#333}
+table{border-collapse:collapse;margin:1em 0;font-size:.95em}
+th,td{border:1px solid #aaa;padding:.4em .8em;text-align:right}
+th{background:#eee;text-align:center}
+td.label{text-align:left;font-family:monospace}
+.callout{background:#fef9e7;border-left:4px solid #d4ac0d;padding:.7em 1em;margin:1em 0}
+.verdict{background:#fadbd8;border-left:4px solid #c0392b;padding:.7em 1em;margin:1em 0;font-weight:600}
+.win{color:#1e8449}
+.loss{color:#c0392b}
+.neutral{color:#7f8c8d}
+code{background:#eee;padding:.1em .3em;border-radius:3px;font-size:.92em}
+</style></head>
+<body>
+
+<h1>5-fold leak-free hybrid: kin+dx + V-JEPA-OOF on MDS-UPDRS item 3.4</h1>
+<p style="color:#666"><b>2026-05-24</b> · may19 dataset · LoRA-FT rank 16, attn-only, 30 epochs · adaptive cache max=48 · subject-OOF combiner with <code>--no-val-tuning</code> · 10-seed ExtraTrees stacker (n_estimators=1000).</p>
+
+<div class="verdict">
+V-JEPA-OOF probs do <b>not</b> improve the leak-free kinematic baseline.<br>
+Δ QWK = <b>−0.004</b> across 5 folds (Wilcoxon p = 0.71, one-sided). The previously reported +0.030 lift on fold 0 was a val-tuning artifact.
+</div>
+
+<h2>Per-fold (10 seeds each)</h2>
+<table>
+<tr><th>fold</th><th>kin+dx (mean ± std)</th><th>+ V-JEPA-OOF</th><th>Δ</th><th>wins</th></tr>
+<tr><td>0</td><td>0.553 ± 0.018</td><td>0.564 ± 0.024</td><td class="win">+0.011</td><td>6/10</td></tr>
+<tr><td>1</td><td>0.446 ± 0.019</td><td>0.432 ± 0.023</td><td class="loss">−0.014</td><td>3/10</td></tr>
+<tr><td>2</td><td>0.579 ± 0.026</td><td>0.586 ± 0.019</td><td class="win">+0.007</td><td>6/10</td></tr>
+<tr><td>3</td><td>0.598 ± 0.025</td><td>0.589 ± 0.021</td><td class="loss">−0.009</td><td>5/10</td></tr>
+<tr><td>4</td><td>0.504 ± 0.018</td><td>0.489 ± 0.032</td><td class="loss">−0.015</td><td>3/10</td></tr>
+<tr style="background:#f4f4f4;font-weight:bold"><td>mean</td><td>0.536 ± 0.055</td><td>0.532 ± 0.062</td><td class="neutral">−0.004</td><td>23/50</td></tr>
+</table>
+
+<p>Pooled 50 fold×seed Wilcoxon (one-sided H<sub>1</sub>: hybrid &gt; baseline): <b>p = 0.7106</b>. 3 of 5 folds show negative Δ; aggregate is null.</p>
+
+<h2>What changed vs the leaky comparison</h2>
+<ol>
+  <li><b>LoRA backbone:</b> use <code>latest.pt</code> (final epoch), not <code>best.pt</code> (selected by val QWK). Removes implicit val tuning of the V-JEPA features.</li>
+  <li><b>Combiner training:</b> <code>--no-val-tuning</code> flag returns final-epoch predictions, not the val-QWK-best snapshot. Removes inner combiner's val-tuning leak.</li>
+  <li><b>Outer 5-fold:</b> the +0.030 lift was a fold-0 single-point estimate. Across all 5 folds it averages to −0.004.</li>
+</ol>
+
+<h2>Stacking variants checked (per fold, no folds gain ≥0.02)</h2>
+<p>The multiseed sweep also tested vjepa-only, statsOnly, fftOnly, top-16 subsets, and the "old_118" feature set (which contains item-3.5 UPDRS label leak — discarded). None showed a meaningful, consistent lift over kin+dx alone in the leak-free protocol.</p>
+
+<h2>What this means for the project</h2>
+<ul>
+<li><b>kin+dx (clean baseline) remains the publishable lower bound</b> at QWK ≈ 0.54 across 5 folds for item 3.4 finger-tapping.</li>
+<li><b>V-JEPA 2.1 features add no signal</b> over kinematic features in this small-N, ordinal-medical regime — consistent with the R² scan finding (V-JEPA features cannot predict scalar kinematic measures, mean R² = −0.117 across 54 configs).</li>
+<li><b>The +0.030 fold-0 lift in <a href="figure_hybrid_clean_qwk.pdf">figure_hybrid_clean_qwk.pdf</a> is invalidated.</b> Should be retracted from any forthcoming write-up.</li>
+</ul>
+
+<h2>Reproducibility</h2>
+<ul>
+<li>Aggregate JSON: <code>docs/results/hybrid_5fold_aggregate.json</code></li>
+<li>Per-fold multiseed JSON: <code>hybrid/item_3_4/fold_{k}/oof_stack/multiseed_oof_probs{,_clean}.json</code></li>
+<li>Pipeline scripts: <code>scripts/pd_hand/{oof_vjepa_combiner_predictions.py, augment_with_oof_probs.py, hybrid_multiseed.py, aggregate_5fold_hybrid.py}</code></li>
+<li>Audit (precursor): <code>docs/results/hybrid_leakage_audit.html</code></li>
+</ul>
+
+<div class="callout">
+<b>Next direction (if pursuing further):</b> rather than stacking V-JEPA probs, consider (i) a learned scalar V-JEPA→kinematic distillation as an auxiliary task during LoRA-FT, (ii) per-fold V-JEPA hyperparameter search with proper inner-cross-validation (not the single 30-epoch LoRA-FT recipe used here), or (iii) a different foundation model (e.g., a hand-specific video model). But the current evidence does not justify additional V-JEPA capacity inside the present recipe.
+</div>
+
+</body></html>

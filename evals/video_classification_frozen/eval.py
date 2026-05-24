@@ -36,6 +36,10 @@ from src.heads.stats_head import (
     TemporalStatsPoolingClassifier,
     TemporalTransformerClassifier,
 )
+from src.heads.adaptive_stats_head import AdaptiveStatsCORNHead
+from src.heads.temporal_agg_head import TemporalAggCORNHead
+from src.heads.window_mil_corn_head import WindowMILCORNHead
+from src.heads.xception_time_head import XceptionTimeCORNHead
 from src.datasets.data_manager import init_data
 from src.losses.corn_loss import corn_expected_score, corn_loss
 from src.models.attentive_pooler import AttentiveClassifier
@@ -54,6 +58,20 @@ torch.backends.cudnn.benchmark = True
 
 pp = pprint.PrettyPrinter(indent=4)
 
+CORN_HEAD_TYPES = {
+    "corn",
+    "temporal_agg_corn",
+    "adaptive_stats_corn",
+    "xception_time_corn",
+    "window_mil_corn",
+}
+ORDINAL_HEAD_TYPES = CORN_HEAD_TYPES | {
+    "softmax",
+    "stats",
+    "temporal_stats",
+    "temporal_transformer",
+}
+
 
 def main(args_eval, resume_preempt=False):
 
@@ -65,6 +83,11 @@ def main(args_eval, resume_preempt=False):
     val_only = args_eval.get("val_only", False)
     if val_only:
         logger.info("VAL ONLY")
+
+    # -- DUMP PER-CLIP VAL PREDICTIONS (writes {folder}/predictions_val_e{epoch}.csv each val pass)
+    dump_predictions = bool(args_eval.get("dump_predictions", False))
+    if dump_predictions:
+        logger.info("DUMPING PER-CLIP VAL PREDICTIONS")
 
     # -- EXPERIMENT
     pretrain_folder = args_eval.get("folder", None)
@@ -91,7 +114,7 @@ def main(args_eval, resume_preempt=False):
     prediction_mode = args_classifier.get("prediction_mode", "argmax")
     selection_metric = args_classifier.get(
         "selection_metric",
-        "quadratic_weighted_kappa" if head_type == "corn" else "val_acc",
+        "quadratic_weighted_kappa" if head_type in CORN_HEAD_TYPES else "val_acc",
     )
 
     # -- DATA
@@ -113,7 +136,7 @@ def main(args_eval, resume_preempt=False):
     corn_pos_weight = None
     softmax_class_weight = None
     label_smoothing = 0.0
-    if head_type == "corn":
+    if head_type in CORN_HEAD_TYPES:
         corn_pos_weight = _resolve_corn_pos_weight(
             args_classifier.get("corn_pos_weight"),
             train_data_path,
@@ -194,7 +217,7 @@ def main(args_eval, resume_preempt=False):
     metrics_path = os.path.join(folder, "metrics_latest.json")
 
     # -- make loggers
-    if head_type in ("corn", "softmax", "stats", "temporal_stats", "temporal_transformer"):
+    if head_type in ORDINAL_HEAD_TYPES:
         log_fields = (
             ("%d", "epoch"),
             ("%.5f", "train_acc"),
@@ -256,6 +279,14 @@ def main(args_eval, resume_preempt=False):
         encoder = DistributedDataParallel(encoder, static_graph=True)
     print(classifiers[0])
 
+    encoder_init_path = args_eval.get("encoder_init_path") or args_classifier.get("encoder_init_path")
+    if encoder_init_path:
+        _load_encoder_init(encoder_init_path, encoder)
+
+    classifier_init_path = args_eval.get("classifier_init_path") or args_classifier.get("init_path")
+    if classifier_init_path:
+        _load_classifier_partial_init(classifier_init_path, classifiers)
+
     train_loader, train_sampler = make_dataloader(
         dataset_type=dataset_type,
         root_path=train_data_path,
@@ -308,12 +339,14 @@ def main(args_eval, resume_preempt=False):
         encoder_opt_kwargs=encoder_opt_kwargs,
     )
 
-    # -- load training checkpoint
+    # -- load training checkpoint (or an explicit eval-only override path like best.pt)
     start_epoch = 0
-    if resume_checkpoint and os.path.exists(latest_path):
+    eval_checkpoint_path = args_eval.get("eval_checkpoint_path") or None
+    resume_path = eval_checkpoint_path if eval_checkpoint_path else latest_path
+    if (resume_checkpoint or eval_checkpoint_path) and os.path.exists(resume_path):
         encoder, classifiers, optimizer, scaler, start_epoch = load_checkpoint(
             device=device,
-            r_path=latest_path,
+            r_path=resume_path,
             encoder=encoder,
             classifiers=classifiers,
             opt=optimizer,
@@ -374,6 +407,11 @@ def main(args_eval, resume_preempt=False):
             )
             train_acc = train_result["acc"]
 
+        dump_predictions_path = (
+            os.path.join(folder, f"predictions_val_e{epoch + 1}.csv")
+            if dump_predictions and rank == 0
+            else None
+        )
         val_result = run_one_epoch(
             device=device,
             training=False,
@@ -393,6 +431,7 @@ def main(args_eval, resume_preempt=False):
             selection_metric=selection_metric,
             prediction_mode=prediction_mode,
             encoder_trainable=encoder_trainable,
+            dump_predictions_path=dump_predictions_path,
         )
         val_acc = val_result["acc"]
 
@@ -413,7 +452,7 @@ def main(args_eval, resume_preempt=False):
             )
         )
         if rank == 0:
-            if head_type in ("corn", "softmax", "stats", "temporal_stats", "temporal_transformer"):
+            if head_type in ORDINAL_HEAD_TYPES:
                 log_values = (
                     epoch + 1,
                     train_acc,
@@ -487,13 +526,14 @@ def run_one_epoch(
     selection_metric=None,
     prediction_mode="argmax",
     encoder_trainable=False,
+    dump_predictions_path=None,
 ):
 
     for c in classifiers:
         c.train(mode=training)
     encoder.train(mode=training and encoder_trainable)
 
-    if head_type == "corn":
+    if head_type in CORN_HEAD_TYPES:
         if corn_pos_weight is not None:
             corn_pos_weight = corn_pos_weight.to(device)
         criterion = lambda logits, labels: corn_loss(
@@ -531,7 +571,7 @@ def run_one_epoch(
             ]
             clip_indices = [d.to(device, non_blocking=True) for d in data[2]]
             labels = data[1].to(device)
-            metadata_features = data[4].to(device, non_blocking=True) if len(data) > 4 else None
+            metadata_features, segment_mask = _batch_extras(data, device)
             batch_size = len(labels)
             batch_coverage = _batch_coverage(data[3]) if len(data) > 3 else {}
             batch_sample_indices = _batch_sample_indices(data[3], batch_size) if len(data) > 3 else None
@@ -545,22 +585,53 @@ def run_one_epoch(
             else:
                 with torch.no_grad():
                     encoder_outputs = encoder(clips, clip_indices)
+            # Heads that aggregate across segments (one loss per video) receive the
+            # full list of K segment outputs. Standard heads receive one segment
+            # at a time and produce K logits per video.
+            def _segment_or_list(c):
+                inner = getattr(c, "module", c)
+                return bool(getattr(inner, "consumes_segment_list", False))
+
             if training:
-                outputs = [
-                    [_classifier_forward(c, o, metadata_features) for o in encoder_outputs]
-                    for c in classifiers
-                ]
+                outputs = []
+                for c in classifiers:
+                    if _segment_or_list(c):
+                        # Pass the full list; head returns a single (B, n_logits) tensor.
+                        outputs.append([
+                            _classifier_forward(
+                                c,
+                                list(encoder_outputs),
+                                metadata_features=metadata_features,
+                                segment_mask=segment_mask,
+                            )
+                        ])
+                    else:
+                        outputs.append([
+                            _classifier_forward(c, o, metadata_features=metadata_features) for o in encoder_outputs
+                        ])
             else:
                 with torch.no_grad():
-                    outputs = [
-                        [_classifier_forward(c, o, metadata_features) for o in encoder_outputs]
-                        for c in classifiers
-                    ]
+                    outputs = []
+                    for c in classifiers:
+                        if _segment_or_list(c):
+                            outputs.append([
+                                _classifier_forward(
+                                    c,
+                                    list(encoder_outputs),
+                                    metadata_features=metadata_features,
+                                    segment_mask=segment_mask,
+                                )
+                            ])
+                        else:
+                            outputs.append([
+                                _classifier_forward(c, o, metadata_features=metadata_features) for o in encoder_outputs
+                            ])
 
-        # Compute loss
+        # Compute loss (one per segment for standard heads, one per video for
+        # consumes_segment_list heads since they returned a single-element list).
         losses = [[criterion(o, labels) for o in coutputs] for coutputs in outputs]
         with torch.no_grad():
-            if head_type == "corn":
+            if head_type in CORN_HEAD_TYPES:
                 outputs = [sum([corn_expected_score(o) for o in coutputs]) / len(coutputs) for coutputs in outputs]
                 pred_outputs = [coutputs.round().clamp(0, num_classes - 1).long() for coutputs in outputs]
                 top1_accs = [
@@ -629,8 +700,9 @@ def run_one_epoch(
         "acc": float(_agg_top1.max()),
         "coverage": {key: float(meter.avg) for key, meter in coverage_meters.items() if meter.count > 0},
     }
-    if head_type in ("corn", "softmax", "stats", "temporal_stats", "temporal_transformer") and not training:
+    if head_type in ORDINAL_HEAD_TYPES and not training:
         per_classifier = []
+        per_classifier_gathered = []
         for scores_i, preds_i, labels_i, indices_i in zip(
             ordinal_scores,
             ordinal_preds,
@@ -641,6 +713,9 @@ def run_one_epoch(
             gathered_preds = _all_gather_python_list(preds_i)
             gathered_labels = _all_gather_python_list(labels_i)
             gathered_indices = _all_gather_python_list(indices_i) if indices_i else None
+            per_classifier_gathered.append(
+                (gathered_scores, gathered_preds, gathered_labels, gathered_indices)
+            )
             per_classifier.append(
                 _ordinal_metrics(
                     labels=np.array(gathered_labels, dtype=np.int64),
@@ -662,11 +737,100 @@ def run_one_epoch(
         result["acc"] = result.get("val_acc", result["acc"])
         result["best_classifier"] = int(best_idx)
         result["per_classifier"] = per_classifier
+
+        if dump_predictions_path is not None:
+            rank0 = (not dist.is_initialized()) or dist.get_rank() == 0
+            if rank0:
+                _write_predictions_csv(
+                    path=dump_predictions_path,
+                    per_classifier_gathered=per_classifier_gathered,
+                    best_idx=best_idx,
+                    num_classes=num_classes,
+                )
     return result
+
+
+def _write_predictions_csv(path, per_classifier_gathered, best_idx, num_classes):
+    """Dump deduplicated per-clip {sample_index, score, pred, label, classifier_idx} rows
+    for every classifier head, plus a `best` flag for the selection-metric winner. Mirrors
+    the dedup-by-sample_index then sort-by-sample_index policy used in _ordinal_metrics so
+    the dumped rows align row-for-row with the reported metrics."""
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, "w", newline="") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(["classifier_idx", "is_best", "sample_index", "score", "pred", "label"])
+        for ci, (g_scores, g_preds, g_labels, g_indices) in enumerate(per_classifier_gathered):
+            labels = np.array(g_labels, dtype=np.int64)
+            preds = np.array(g_preds, dtype=np.int64)
+            scores = np.array(g_scores, dtype=np.float64)
+            indices = np.array(g_indices, dtype=np.int64) if g_indices else None
+            if indices is not None and indices.size == labels.size:
+                seen = set()
+                keep = []
+                for row_idx, sample_idx in enumerate(indices.tolist()):
+                    sample_idx = int(sample_idx)
+                    if sample_idx in seen:
+                        continue
+                    seen.add(sample_idx)
+                    keep.append(row_idx)
+                keep = np.array(keep, dtype=np.int64)
+                labels = labels[keep]
+                preds = preds[keep]
+                scores = scores[keep]
+                indices = indices[keep]
+                order = np.argsort(indices, kind="mergesort")
+                labels = labels[order]
+                preds = preds[order]
+                scores = scores[order]
+                indices = indices[order]
+            preds = np.clip(preds, 0, num_classes - 1)
+            labels = np.clip(labels, 0, num_classes - 1)
+            is_best = 1 if ci == best_idx else 0
+            for row_idx in range(labels.size):
+                writer.writerow([
+                    ci,
+                    is_best,
+                    int(indices[row_idx]) if indices is not None else -1,
+                    float(scores[row_idx]),
+                    int(preds[row_idx]),
+                    int(labels[row_idx]),
+                ])
+    logger.info(f"Wrote per-clip predictions to {path}")
 
 
 def _build_classifier(head_type, embed_dim, num_heads, depth, num_classes, head_kwargs=None):
     head_kwargs = head_kwargs or {}
+    if head_type == "temporal_agg_corn":
+        # Per-segment attentive pool + temporal attention pool + single CORN logit.
+        return TemporalAggCORNHead(
+            embed_dim=embed_dim,
+            num_heads=num_heads,
+            depth=depth,
+            num_levels=num_classes,
+            use_activation_checkpointing=True,
+            **head_kwargs,
+        )
+    if head_type == "adaptive_stats_corn":
+        return AdaptiveStatsCORNHead(
+            embed_dim=embed_dim,
+            num_levels=num_classes,
+            **head_kwargs,
+        )
+    if head_type == "xception_time_corn":
+        return XceptionTimeCORNHead(
+            embed_dim=embed_dim,
+            num_levels=num_classes,
+            **head_kwargs,
+        )
+    if head_type == "window_mil_corn":
+        return WindowMILCORNHead(
+            embed_dim=embed_dim,
+            num_heads=num_heads,
+            depth=depth,
+            num_levels=num_classes,
+            use_activation_checkpointing=True,
+            **head_kwargs,
+        )
     if head_type == "corn":
         return CORNAttentiveClassifier(
             embed_dim=embed_dim,
@@ -702,13 +866,27 @@ def _build_classifier(head_type, embed_dim, num_heads, depth, num_classes, head_
     )
 
 
-def _classifier_forward(classifier, tokens, metadata_features=None):
+def _classifier_forward(classifier, tokens, metadata_features=None, segment_mask=None):
     # Unwrap DDP / FSDP so `metadata_dim` lookup hits the actual module, not
     # the wrapper. Without this, DDP-wrapped heads silently lose metadata.
     inner = getattr(classifier, "module", classifier)
+    kwargs = {}
+    if segment_mask is not None and getattr(inner, "supports_segment_mask", False):
+        kwargs["segment_mask"] = segment_mask
     if metadata_features is not None and getattr(inner, "metadata_dim", 0) > 0:
-        return classifier(tokens, metadata_features)
-    return classifier(tokens)
+        kwargs["metadata_features"] = metadata_features
+    return classifier(tokens, **kwargs)
+
+
+def _batch_extras(data, device):
+    metadata_features = None
+    segment_mask = None
+    for extra in data[4:]:
+        if torch.is_tensor(extra) and extra.dtype == torch.bool and extra.ndim == 2:
+            segment_mask = extra.to(device, non_blocking=True)
+        elif torch.is_tensor(extra):
+            metadata_features = extra.to(device, non_blocking=True)
+    return metadata_features, segment_mask
 
 
 def _init_wandb_logger(wandb_cfg, log_fields, args_eval, folder, eval_tag):
@@ -1011,6 +1189,48 @@ def load_checkpoint(device, r_path, encoder, classifiers, opt, scaler, val_only=
     logger.info(f"loaded optimizers from epoch {epoch}")
 
     return encoder, classifiers, opt, scaler, epoch
+
+
+def _load_encoder_init(r_path, encoder):
+    checkpoint = robust_checkpoint_loader(r_path, map_location=torch.device("cpu"))
+    if checkpoint.get("encoder") is None:
+        logger.warning(f"encoder_init_path has no encoder state: {r_path}")
+        return
+    msg = _unwrap_module(encoder).load_state_dict(checkpoint["encoder"], strict=False)
+    logger.info(f"loaded encoder_init_path={r_path} with msg: {msg}")
+
+
+def _load_classifier_partial_init(r_path, classifiers):
+    checkpoint = robust_checkpoint_loader(r_path, map_location=torch.device("cpu"))
+    pretrained_dicts = checkpoint.get("classifiers")
+    if not pretrained_dicts:
+        logger.warning(f"classifier_init_path has no classifier state: {r_path}")
+        return
+
+    for classifier_idx, (classifier, pretrained) in enumerate(zip(classifiers, pretrained_dicts)):
+        current = classifier.state_dict()
+        compatible = {}
+        skipped = []
+        for key, value in pretrained.items():
+            target = current.get(key)
+            if target is not None and tuple(target.shape) == tuple(value.shape):
+                compatible[key] = value
+            else:
+                skipped.append(key)
+        if not compatible:
+            logger.warning(
+                f"classifier_init_path copied no tensors for classifier {classifier_idx}: {r_path}"
+            )
+            continue
+        msg = classifier.load_state_dict(compatible, strict=False)
+        logger.info(
+            "loaded classifier_init_path=%s classifier=%d copied=%d skipped=%d msg=%s",
+            r_path,
+            classifier_idx,
+            len(compatible),
+            len(skipped),
+            msg,
+        )
 
 
 def load_pretrained(encoder, pretrained, checkpoint_key="target_encoder"):

@@ -1,0 +1,608 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>What V-JEPA is actually learning — and why it misses tap rhythm</title>
+<style>
+  :root {
+    --fg: #1a1a1a;
+    --muted: #6a6a6a;
+    --accent: #c9430b;
+    --good: #1f7a47;
+    --bad: #b22222;
+    --border: #d8d4cc;
+    --bg-soft: #faf7f0;
+    --bg-callout: #f3efe5;
+    --bg-warn: #fff6e0;
+    --bg-good: #e7f2eb;
+    --bg-cool: #eef3f7;
+  }
+  html { scroll-behavior: smooth; }
+  body { background: #fffdf8; color: var(--fg);
+         font-family: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+         max-width: 980px; margin: 36px auto; padding: 0 26px; line-height: 1.58; font-size: 15.5px; }
+  h1 { font-size: 30px; margin-bottom: 4px; font-weight: 700; line-height: 1.18; }
+  h2 { font-size: 21px; margin-top: 46px; padding-bottom: 4px; border-bottom: 1px solid var(--border); }
+  h3 { font-size: 14.5px; margin-top: 26px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--accent); }
+  .lede { color: var(--muted); font-size: 16px; margin-top: 6px; }
+  code { font-family: "JetBrains Mono", Menlo, monospace; font-size: 13px; background: var(--bg-soft); padding: 1px 5px; border-radius: 3px; }
+  pre { font-family: "JetBrains Mono", Menlo, monospace; font-size: 12.5px; background: var(--bg-soft);
+        border: 1px solid var(--border); border-radius: 4px; padding: 10px 14px; overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0 14px; font-size: 13.8px; }
+  th { background: var(--bg-callout); text-align: left; font-weight: 600; }
+  th, td { border: 1px solid var(--border); padding: 7px 11px; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  tr.winner td { background: var(--bg-good); font-weight: 600; }
+  .callout { background: var(--bg-callout); border-left: 3px solid var(--accent); padding: 12px 18px; margin: 16px 0; font-size: 14.5px; }
+  .callout.warn { background: var(--bg-warn); border-left-color: #b88a00; }
+  .callout.good { background: var(--bg-good); border-left-color: var(--good); }
+  .callout.cool { background: var(--bg-cool); border-left-color: #265e8a; }
+  .callout strong { color: var(--accent); }
+  .callout.good strong { color: var(--good); }
+  .callout.warn strong { color: #8a6a00; }
+  .callout.cool strong { color: #265e8a; }
+  ul, ol { padding-left: 22px; } li { margin: 5px 0; }
+  .footnote { color: var(--muted); font-size: 12.5px; margin-top: 6px; }
+  .pill { display: inline-block; padding: 1px 9px; border-radius: 11px; font-size: 11px;
+          background: var(--bg-callout); color: var(--accent); font-weight: 600;
+          letter-spacing: 0.04em; text-transform: uppercase; vertical-align: middle; }
+  .pill.good { background: var(--bg-good); color: var(--good); }
+  .pill.bad  { background: #fef0f0; color: var(--bad); }
+  .pill.warn { background: var(--bg-warn); color: #8a6a00; }
+  .pill.cool { background: var(--bg-cool); color: #265e8a; }
+  figure { margin: 18px 0; padding: 16px; background: var(--bg-soft);
+           border: 1px solid var(--border); border-radius: 6px; }
+  figcaption { font-size: 12.5px; color: var(--muted); margin-top: 8px; text-align: center; }
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .two-col > div { background: var(--bg-soft); border: 1px solid var(--border); padding: 12px 16px; border-radius: 4px; }
+  .two-col h4 { margin: 0 0 6px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--accent); }
+  .toc { background: var(--bg-soft); border: 1px solid var(--border); padding: 12px 18px; border-radius: 4px; margin-top: 14px; }
+  .toc ol { margin: 6px 0 0 0; padding-left: 22px; }
+  .toc li { margin: 2px 0; font-size: 14px; }
+  svg { display: block; margin: 0 auto; max-width: 100%; height: auto; }
+  @media (max-width: 700px) { .two-col { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+
+<h1>What V-JEPA is actually learning — and why it misses tap rhythm</h1>
+<p class="lede">
+  A walk through the current finger-tap pipeline (item 3.4) at the level of frames, tubelets,
+  masks, and loss terms. The goal is to make the phrase
+  <strong>"appearance ≠ rhythm"</strong> precise enough to act on, and to show why doubling the
+  dataset or adding more attentive-probe blocks will not, by themselves, fix it.
+</p>
+
+<div class="toc">
+  <strong>Contents</strong>
+  <ol>
+    <li><a href="#two-stages">Two different "clips" — don't conflate them</a></li>
+    <li><a href="#ssl">Stage 1: V-JEPA self-supervised training</a></li>
+    <li><a href="#tokens">What a "clip" looks like as tokens</a></li>
+    <li><a href="#loss">The loss term: predict masked tokens from visible ones</a></li>
+    <li><a href="#eval">Stage 2: Eval pipeline — 12 segments, mean-of-logits</a></li>
+    <li><a href="#overlap">Do the 12 segments overlap?</a></li>
+    <li><a href="#why">Why "appearance ≠ rhythm" — the structural argument</a></li>
+    <li><a href="#updrs">UPDRS 3.4 vs the model's actual time horizon</a></li>
+    <li><a href="#fix">How to fix it, ranked</a></li>
+  </ol>
+</div>
+
+<h2 id="two-stages">1. Two different "clips" — don't conflate them</h2>
+
+<p>The word "clip" is doing too much work in this project. There are two stages, and "clip" means
+different things in each.</p>
+
+<div class="two-col">
+  <div>
+    <h4>Stage 1 — SSL training</h4>
+    <p>One "clip" = a <strong>32-frame window at stride 1</strong>, i.e. ~1.07 s at 30 fps.<br>
+    <em>One</em> such window is sampled randomly per video per iteration.<br>
+    The model has to reconstruct masked tokens inside this one window.</p>
+  </div>
+  <div>
+    <h4>Stage 2 — eval / attentive probe</h4>
+    <p>The full hand-task <strong>video</strong> (~10 s) is split into 12 segments.<br>
+    Each segment is itself a 32-frame, ~1.07 s sub-clip.<br>
+    Each sub-clip is encoded independently; logits are averaged across the 12 passes.</p>
+  </div>
+</div>
+
+<p>Below I'll keep calling the 1.07 s thing a <em>sub-clip</em> and the 10 s thing a <em>video</em>.</p>
+
+<h2 id="ssl">2. Stage 1: V-JEPA self-supervised training</h2>
+
+<p>From <code>configs/train_2_1/pd_hand/vitl384-lora-jepa-adapt-32f-step1-fold0.yaml</code>:</p>
+
+<pre>frames_per_clip: 32
+frame_step:      1
+tubelet_size:    2
+num_clips:       1
+random_clip_sampling: true
+allow_clip_overlap:   false
+</pre>
+
+<ul>
+  <li><strong>32 frames at stride 1</strong> = ~1.07 s of footage @ 30 fps.</li>
+  <li><strong>num_clips: 1</strong> — one random window per video per iteration.</li>
+  <li><strong>random_clip_sampling: true</strong> — start position varies; over training the model
+  sees many different 1-second windows from each video, but never two at once.</li>
+  <li><strong>allow_clip_overlap: false</strong> — irrelevant here because <code>num_clips=1</code>,
+  but signals "don't allow temporally adjacent samples in the same batch".</li>
+</ul>
+
+<figure>
+  <svg viewBox="0 0 700 130" xmlns="http://www.w3.org/2000/svg" aria-label="One iteration samples a single 1-second window from a 10-second hand-task video.">
+    <rect x="10" y="36" width="680" height="22" fill="#ece4d3" stroke="#b09a6e"/>
+    <text x="10" y="28" font-family="sans-serif" font-size="11" fill="#6a6a6a">Full finger-tap video (~10 s, ~300 frames)</text>
+    <line x1="10" y1="58" x2="10" y2="68" stroke="#6a6a6a"/>
+    <line x1="690" y1="58" x2="690" y2="68" stroke="#6a6a6a"/>
+    <text x="10" y="80" font-family="sans-serif" font-size="11" fill="#6a6a6a">0 s</text>
+    <text x="660" y="80" font-family="sans-serif" font-size="11" fill="#6a6a6a">~10 s</text>
+    <rect x="230" y="36" width="74" height="22" fill="#c9430b" opacity="0.85"/>
+    <text x="240" y="105" font-family="sans-serif" font-size="12" fill="#c9430b" font-weight="600">one random 32-frame window (1.07 s)</text>
+    <line x1="267" y1="58" x2="267" y2="92" stroke="#c9430b" stroke-dasharray="2,2"/>
+  </svg>
+  <figcaption>Stage 1 iteration: a single ~1-second window is picked at a random start. Across iterations the model sees many such windows, but each forward pass only ever sees one.</figcaption>
+</figure>
+
+<h2 id="tokens">3. What a "clip" looks like as tokens</h2>
+
+<p>V-JEPA doesn't see pixels directly — it sees <em>tubelet</em> tokens. Plugging in the config:</p>
+
+<table>
+  <tr><th>Quantity</th><th>Formula</th><th class="num">Value</th></tr>
+  <tr><td>Frames per window</td><td>config</td><td class="num">32</td></tr>
+  <tr><td>Spatial resolution</td><td>config</td><td class="num">384 × 384</td></tr>
+  <tr><td>Patch size</td><td>config</td><td class="num">16</td></tr>
+  <tr><td>Tubelet size (temporal patch)</td><td>config</td><td class="num">2</td></tr>
+  <tr><td>Temporal token positions</td><td>32 / 2</td><td class="num">16</td></tr>
+  <tr><td>Spatial token positions</td><td>(384 / 16)<sup>2</sup> = 24<sup>2</sup></td><td class="num">576</td></tr>
+  <tr><td>Tokens per window</td><td>16 × 576</td><td class="num">9216</td></tr>
+  <tr><td>Time per temporal token</td><td>(2 / 30) s</td><td class="num">~67 ms</td></tr>
+</table>
+
+<p>So one V-JEPA window is a stack of <strong>16 temporal slices</strong>, each containing 576
+spatial patches. Each temporal slice corresponds to ~67 ms of footage — short enough that a
+fast finger tap (say 4 Hz, 250 ms per cycle) spans ~3–4 temporal tokens.</p>
+
+<figure>
+  <svg viewBox="0 0 700 170" xmlns="http://www.w3.org/2000/svg" aria-label="32 input frames become 16 tubelet temporal slices.">
+    <text x="0" y="20" font-family="sans-serif" font-size="12" fill="#6a6a6a">32 input frames (1.07 s)</text>
+    <g>
+      <!-- 32 small frame rectangles -->
+      <g fill="#ece4d3" stroke="#b09a6e">
+        <!-- generate row of 32 -->
+      </g>
+    </g>
+    <!-- frames row -->
+    <g>
+      <!-- 32 rects -->
+      <g transform="translate(0,30)">
+        <g fill="#ece4d3" stroke="#b09a6e">
+          <rect x="0"   y="0" width="18" height="22"/><rect x="20"  y="0" width="18" height="22"/>
+          <rect x="40"  y="0" width="18" height="22"/><rect x="60"  y="0" width="18" height="22"/>
+          <rect x="80"  y="0" width="18" height="22"/><rect x="100" y="0" width="18" height="22"/>
+          <rect x="120" y="0" width="18" height="22"/><rect x="140" y="0" width="18" height="22"/>
+          <rect x="160" y="0" width="18" height="22"/><rect x="180" y="0" width="18" height="22"/>
+          <rect x="200" y="0" width="18" height="22"/><rect x="220" y="0" width="18" height="22"/>
+          <rect x="240" y="0" width="18" height="22"/><rect x="260" y="0" width="18" height="22"/>
+          <rect x="280" y="0" width="18" height="22"/><rect x="300" y="0" width="18" height="22"/>
+          <rect x="320" y="0" width="18" height="22"/><rect x="340" y="0" width="18" height="22"/>
+          <rect x="360" y="0" width="18" height="22"/><rect x="380" y="0" width="18" height="22"/>
+          <rect x="400" y="0" width="18" height="22"/><rect x="420" y="0" width="18" height="22"/>
+          <rect x="440" y="0" width="18" height="22"/><rect x="460" y="0" width="18" height="22"/>
+          <rect x="480" y="0" width="18" height="22"/><rect x="500" y="0" width="18" height="22"/>
+          <rect x="520" y="0" width="18" height="22"/><rect x="540" y="0" width="18" height="22"/>
+          <rect x="560" y="0" width="18" height="22"/><rect x="580" y="0" width="18" height="22"/>
+          <rect x="600" y="0" width="18" height="22"/><rect x="620" y="0" width="18" height="22"/>
+        </g>
+      </g>
+    </g>
+    <text x="0" y="90" font-family="sans-serif" font-size="12" fill="#6a6a6a">16 tubelet slices (each pools 2 adjacent frames)</text>
+    <g transform="translate(0,100)">
+      <g fill="#c9430b" opacity="0.85" stroke="#7a2906">
+        <rect x="0"   y="0" width="38" height="22"/><rect x="40"  y="0" width="38" height="22"/>
+        <rect x="80"  y="0" width="38" height="22"/><rect x="120" y="0" width="38" height="22"/>
+        <rect x="160" y="0" width="38" height="22"/><rect x="200" y="0" width="38" height="22"/>
+        <rect x="240" y="0" width="38" height="22"/><rect x="280" y="0" width="38" height="22"/>
+        <rect x="320" y="0" width="38" height="22"/><rect x="360" y="0" width="38" height="22"/>
+        <rect x="400" y="0" width="38" height="22"/><rect x="440" y="0" width="38" height="22"/>
+        <rect x="480" y="0" width="38" height="22"/><rect x="520" y="0" width="38" height="22"/>
+        <rect x="560" y="0" width="38" height="22"/><rect x="600" y="0" width="38" height="22"/>
+      </g>
+    </g>
+    <text x="0" y="155" font-family="sans-serif" font-size="11" fill="#6a6a6a">Each tubelet slice = 576 spatial patches = 1 column of 576 tokens (not drawn). Total: 9216 tokens.</text>
+  </svg>
+  <figcaption>Tubelet embedding collapses every 2 adjacent frames into a single temporal token.
+  This is the temporal resolution at which V-JEPA "sees" the world: ~67 ms per token.</figcaption>
+</figure>
+
+<h2 id="loss">4. The loss term: predict masked tokens from visible ones</h2>
+
+<p>The objective is the V-JEPA masked-prediction loss. Two mask configs are mixed (from the
+same training config):</p>
+
+<pre>mask 1: 8 small spatial blocks  (~15% spatial area each), temporal_scale [1.0, 1.0]
+mask 2: 2 large spatial blocks  (~70% spatial area each), temporal_scale [1.0, 1.0]
+</pre>
+
+<p>Both masks have <code>temporal_scale [1.0, 1.0]</code> — they cover <strong>all 16 temporal
+positions</strong> for whatever spatial region they pick. So masks look like vertical "columns"
+in the (space, time) token grid:</p>
+
+<figure>
+  <svg viewBox="0 0 560 260" xmlns="http://www.w3.org/2000/svg" aria-label="Mask geometry: spatial blocks that span the full temporal extent.">
+    <text x="0" y="16" font-family="sans-serif" font-size="12" fill="#6a6a6a">Spatial patches (24×24, simplified to 8×8 grid)</text>
+    <text x="0" y="32" font-family="sans-serif" font-size="12" fill="#6a6a6a">Time → 16 tubelet slices, left to right inside each mini-square</text>
+
+    <!-- 8x8 grid of cells, each cell is a small "stack" -->
+    <g transform="translate(40,50)">
+      <!-- background grid -->
+      <g fill="#ece4d3" stroke="#b09a6e">
+        <!-- 64 cells -->
+        <g>
+          <!-- rows -->
+          <rect x="0"   y="0"   width="48" height="22"/><rect x="50"  y="0"   width="48" height="22"/>
+          <rect x="100" y="0"   width="48" height="22"/><rect x="150" y="0"   width="48" height="22"/>
+          <rect x="200" y="0"   width="48" height="22"/><rect x="250" y="0"   width="48" height="22"/>
+          <rect x="300" y="0"   width="48" height="22"/><rect x="350" y="0"   width="48" height="22"/>
+          <rect x="0"   y="24"  width="48" height="22"/><rect x="50"  y="24"  width="48" height="22"/>
+          <rect x="100" y="24"  width="48" height="22"/><rect x="150" y="24"  width="48" height="22"/>
+          <rect x="200" y="24"  width="48" height="22"/><rect x="250" y="24"  width="48" height="22"/>
+          <rect x="300" y="24"  width="48" height="22"/><rect x="350" y="24"  width="48" height="22"/>
+          <rect x="0"   y="48"  width="48" height="22"/><rect x="50"  y="48"  width="48" height="22"/>
+          <rect x="100" y="48"  width="48" height="22"/><rect x="150" y="48"  width="48" height="22"/>
+          <rect x="200" y="48"  width="48" height="22"/><rect x="250" y="48"  width="48" height="22"/>
+          <rect x="300" y="48"  width="48" height="22"/><rect x="350" y="48"  width="48" height="22"/>
+          <rect x="0"   y="72"  width="48" height="22"/><rect x="50"  y="72"  width="48" height="22"/>
+          <rect x="100" y="72"  width="48" height="22"/><rect x="150" y="72"  width="48" height="22"/>
+          <rect x="200" y="72"  width="48" height="22"/><rect x="250" y="72"  width="48" height="22"/>
+          <rect x="300" y="72"  width="48" height="22"/><rect x="350" y="72"  width="48" height="22"/>
+          <rect x="0"   y="96"  width="48" height="22"/><rect x="50"  y="96"  width="48" height="22"/>
+          <rect x="100" y="96"  width="48" height="22"/><rect x="150" y="96"  width="48" height="22"/>
+          <rect x="200" y="96"  width="48" height="22"/><rect x="250" y="96"  width="48" height="22"/>
+          <rect x="300" y="96"  width="48" height="22"/><rect x="350" y="96"  width="48" height="22"/>
+          <rect x="0"   y="120" width="48" height="22"/><rect x="50"  y="120" width="48" height="22"/>
+          <rect x="100" y="120" width="48" height="22"/><rect x="150" y="120" width="48" height="22"/>
+          <rect x="200" y="120" width="48" height="22"/><rect x="250" y="120" width="48" height="22"/>
+          <rect x="300" y="120" width="48" height="22"/><rect x="350" y="120" width="48" height="22"/>
+          <rect x="0"   y="144" width="48" height="22"/><rect x="50"  y="144" width="48" height="22"/>
+          <rect x="100" y="144" width="48" height="22"/><rect x="150" y="144" width="48" height="22"/>
+          <rect x="200" y="144" width="48" height="22"/><rect x="250" y="144" width="48" height="22"/>
+          <rect x="300" y="144" width="48" height="22"/><rect x="350" y="144" width="48" height="22"/>
+          <rect x="0"   y="168" width="48" height="22"/><rect x="50"  y="168" width="48" height="22"/>
+          <rect x="100" y="168" width="48" height="22"/><rect x="150" y="168" width="48" height="22"/>
+          <rect x="200" y="168" width="48" height="22"/><rect x="250" y="168" width="48" height="22"/>
+          <rect x="300" y="168" width="48" height="22"/><rect x="350" y="168" width="48" height="22"/>
+        </g>
+      </g>
+      <!-- masked blocks (8 small): mark some cells red across full time -->
+      <g fill="#c9430b" opacity="0.85" stroke="#7a2906">
+        <rect x="100" y="0"   width="48" height="22"/>
+        <rect x="250" y="24"  width="48" height="22"/>
+        <rect x="0"   y="48"  width="48" height="22"/>
+        <rect x="350" y="48"  width="48" height="22"/>
+        <rect x="150" y="96"  width="48" height="22"/>
+        <rect x="50"  y="120" width="48" height="22"/>
+        <rect x="300" y="144" width="48" height="22"/>
+        <rect x="200" y="168" width="48" height="22"/>
+      </g>
+    </g>
+    <text x="40" y="240" font-family="sans-serif" font-size="11.5" fill="#6a6a6a">
+      <tspan fill="#c9430b" font-weight="600">red</tspan> = masked spatial patch, covering ALL 16 timesteps of that location.
+      <tspan fill="#b09a6e">tan</tspan> = visible. Encoder only sees visible; predictor must guess the red columns' embeddings.
+    </text>
+  </svg>
+  <figcaption>The masked regions are spatial "columns" that punch through the entire 1-second clip.
+  This makes the loss <em>temporal</em>: the model must produce embeddings that are consistent
+  across all 16 timesteps for masked locations. But what kind of temporal information actually
+  has to be encoded to win this loss? That is the crux.</figcaption>
+</figure>
+
+<div class="callout">
+  <strong>The loss says:</strong> "Look at the visible tokens (encoder output). Now produce embeddings
+  for the masked locations that match the embeddings the EMA encoder would have produced if it had
+  seen them." Loss = L1 distance (per config: <code>loss_exp: 1.0</code>) between predicted and
+  target embeddings, averaged over masked positions.
+</div>
+
+<p>Two things matter about that statement:</p>
+
+<ol>
+  <li><strong>"Match the EMA encoder's embedding"</strong> — not "match the pixels." The target
+  is itself a learned representation that has been drifting alongside the student. The model only
+  has to produce <em>the same kind of feature</em> that the EMA encoder produces for that
+  location. If the EMA encoder mostly encodes appearance, the loss is satisfied by reproducing
+  appearance.</li>
+  <li><strong>The masked region is <em>local in space, global in time</em></strong> — the model
+  must extrapolate spatially (from the rest of the hand) but is given no temporal extrapolation
+  pressure outside the 1.07 s window.</li>
+</ol>
+
+<h2 id="eval">5. Stage 2: Eval pipeline — 12 segments, mean-of-logits</h2>
+
+<p>From <code>configs/eval_2_1/pd_hand_item_3_4_fold0_vjepa2_1_vitl384_lora_e20_attentive.yaml</code>:</p>
+
+<pre>frames_per_clip:        32
+frame_step:             1
+num_segments:           12
+num_views_per_segment:  1
+</pre>
+
+<p>The full ~10 s video is split into <strong>12 temporal segments</strong>. Each segment yields
+a 32-frame, ~1.07 s sub-clip. Each sub-clip flows independently through V-JEPA → attentive probe
+→ CORN logits. The final prediction is the <strong>mean of the 12 logit vectors</strong>:</p>
+
+<figure>
+  <svg viewBox="0 0 700 220" xmlns="http://www.w3.org/2000/svg" aria-label="Twelve overlapping segments cover the video; each is encoded independently and logits are averaged.">
+    <text x="0" y="18" font-family="sans-serif" font-size="12" fill="#6a6a6a">Full finger-tap video</text>
+    <rect x="0" y="28" width="700" height="22" fill="#ece4d3" stroke="#b09a6e"/>
+    <!-- 12 overlapping segments along the video bar -->
+    <g fill="#c9430b" opacity="0.45" stroke="#7a2906">
+      <rect x="0"   y="54" width="74" height="14"/>
+      <rect x="55"  y="70" width="74" height="14"/>
+      <rect x="110" y="54" width="74" height="14"/>
+      <rect x="165" y="70" width="74" height="14"/>
+      <rect x="220" y="54" width="74" height="14"/>
+      <rect x="275" y="70" width="74" height="14"/>
+      <rect x="330" y="54" width="74" height="14"/>
+      <rect x="385" y="70" width="74" height="14"/>
+      <rect x="440" y="54" width="74" height="14"/>
+      <rect x="495" y="70" width="74" height="14"/>
+      <rect x="550" y="54" width="74" height="14"/>
+      <rect x="605" y="70" width="74" height="14"/>
+    </g>
+    <text x="0" y="105" font-family="sans-serif" font-size="11" fill="#6a6a6a">
+      12 segments, each 32 frames (1.07 s). Starts spaced ~0.74 s apart in a 10 s video → adjacent segments overlap.
+    </text>
+    <!-- 12 boxes flowing into encoder -->
+    <g transform="translate(0,130)">
+      <g fill="#c9430b" opacity="0.85">
+        <rect x="0"   y="0" width="50" height="22"/>
+        <rect x="56"  y="0" width="50" height="22"/>
+        <rect x="112" y="0" width="50" height="22"/>
+        <rect x="168" y="0" width="50" height="22"/>
+        <rect x="224" y="0" width="50" height="22"/>
+        <rect x="280" y="0" width="50" height="22"/>
+        <rect x="336" y="0" width="50" height="22"/>
+        <rect x="392" y="0" width="50" height="22"/>
+        <rect x="448" y="0" width="50" height="22"/>
+        <rect x="504" y="0" width="50" height="22"/>
+        <rect x="560" y="0" width="50" height="22"/>
+        <rect x="616" y="0" width="50" height="22"/>
+      </g>
+      <text x="0" y="-5" font-family="sans-serif" font-size="11" fill="#6a6a6a">Each segment → V-JEPA encoder → attentive probe → logit vector (5 CORN logits)</text>
+      <!-- arrows down to averaging -->
+      <g stroke="#7a2906" stroke-width="1">
+        <line x1="25"  y1="22" x2="25"  y2="40"/>
+        <line x1="81"  y1="22" x2="81"  y2="40"/>
+        <line x1="137" y1="22" x2="137" y2="40"/>
+        <line x1="193" y1="22" x2="193" y2="40"/>
+        <line x1="249" y1="22" x2="249" y2="40"/>
+        <line x1="305" y1="22" x2="305" y2="40"/>
+        <line x1="361" y1="22" x2="361" y2="40"/>
+        <line x1="417" y1="22" x2="417" y2="40"/>
+        <line x1="473" y1="22" x2="473" y2="40"/>
+        <line x1="529" y1="22" x2="529" y2="40"/>
+        <line x1="585" y1="22" x2="585" y2="40"/>
+        <line x1="641" y1="22" x2="641" y2="40"/>
+      </g>
+      <rect x="0" y="42" width="666" height="22" fill="#1f7a47" opacity="0.85"/>
+      <text x="220" y="58" font-family="sans-serif" font-size="13" fill="white" font-weight="600">mean of 12 logit vectors → final UPDRS prediction</text>
+    </g>
+  </svg>
+  <figcaption>Eval: each ~1-second window is encoded independently, the 12 attentive-probe outputs
+  are averaged in logit space, and the average becomes the clip prediction. There is no module
+  here that compares window <em>i</em> to window <em>i+1</em>.</figcaption>
+</figure>
+
+<h2 id="overlap">6. Do the 12 segments overlap?</h2>
+
+<p>Almost always, yes, for the videos we have. With <code>num_segments=12</code>,
+<code>frames_per_clip=32</code>, <code>frame_step=1</code>:</p>
+
+<table>
+  <tr><th>Video length</th><th class="num">Total frames</th><th>Segment starts spaced by</th><th>Overlap?</th></tr>
+  <tr><td>5 s</td><td class="num">150</td><td>~11 frames (0.37 s)</td><td><span class="pill bad">heavy overlap</span></td></tr>
+  <tr><td>10 s (typical)</td><td class="num">300</td><td>~22 frames (0.74 s)</td><td><span class="pill warn">overlap (~10 frames shared per pair)</span></td></tr>
+  <tr><td>13 s</td><td class="num">390</td><td>~32 frames (1.07 s)</td><td><span class="pill">borderline, no overlap, no gap</span></td></tr>
+  <tr><td>20 s</td><td class="num">600</td><td>~52 frames (1.73 s)</td><td><span class="pill bad">gaps between segments</span></td></tr>
+  <tr><td>30+ s</td><td class="num">900+</td><td>≥ 79 frames (2.6 s+)</td><td><span class="pill bad">large gaps; most of the video unseen</span></td></tr>
+</table>
+
+<p>For 10-second clips this is fine — every frame is in at least one segment, and adjacent
+segments share content. For videos longer than ~13 s, segments start <em>gapping</em>, and the
+model literally never looks at the frames in those gaps. This is exactly the length-bin
+degradation in <code>adaptive_window_item_3_4_fold0_status.md</code>:</p>
+
+<table>
+  <tr><th>Model</th><th class="num">≤ 8.5 s</th><th class="num">8.5–14 s</th><th class="num">&gt; 14 s</th></tr>
+  <tr><td>Fixed K=4 attentive (Acc / QWK)</td><td class="num">75.0 / 0.816</td><td class="num">45.7 / 0.385</td><td class="num">25.0 / 0.308</td></tr>
+  <tr><td>Fixed-best on adaptive coverage (Acc / QWK)</td><td class="num">75.0 / 0.816</td><td class="num">41.3 / 0.331</td><td class="num">12.5 / 0.184</td></tr>
+</table>
+
+<p>The "adaptive windows" track (set <code>K = ceil(duration_s)</code> instead of 12) was an
+attempt to close those gaps. It did — but it didn't move the QWK number, because gap-closing is
+not the bottleneck for typical-length clips.</p>
+
+<h2 id="why">7. Why "appearance ≠ rhythm" — the structural argument</h2>
+
+<p>Put the three observations together:</p>
+
+<div class="callout warn">
+  <strong>Observation A.</strong> The SSL loss rewards: reproducing the EMA encoder's
+  embedding at a masked spatial location, given the visible spatial neighborhood, for all 16
+  timesteps. It is solvable using mostly appearance + slow drift; counting taps is not necessary.
+</div>
+
+<div class="callout warn">
+  <strong>Observation B.</strong> Each forward pass sees only ~1.07 s of footage. A typical PD
+  finger-tap is 1.5–4 Hz, so 1.07 s contains ≈ 1–4 taps. <em>Decrement</em> (the canonical UPDRS
+  3.4 cue) is a property of the trajectory over <strong>≥ 10 taps</strong> ≈ 5–10 s. It is not
+  visible inside one V-JEPA window.
+</div>
+
+<div class="callout warn">
+  <strong>Observation C.</strong> At eval, the 12 per-window logit vectors are <em>averaged</em>.
+  Averaging is a commutative operation: it does not know the order of the windows. So even if a
+  given window encoded "I am the 3rd tap and I am 12% smaller than the 1st tap," that information
+  would be flattened by the mean.
+</div>
+
+<p>So the chain is:</p>
+
+<ol>
+  <li>The SSL objective does not force the encoder to represent tap rhythm.</li>
+  <li>Even if it did, no single window contains enough taps to <em>see</em> decrement.</li>
+  <li>Even if some windows did encode that, the eval averages them in logit space, throwing away
+  ordering.</li>
+</ol>
+
+<p>That is the precise sense in which V-JEPA "encodes appearance, not rhythm" in our current
+setup. It's not a property of V-JEPA the algorithm — it's a property of how we've configured
+it for this task. Three independent steps each strip out rhythm.</p>
+
+<div class="callout good">
+  <strong>Corollary that matches the experimental results.</strong>
+  This explains why the cached-embedding → temporal-statistics → tabular-stacker recipe worked
+  (QWK 0.689) while the learned aggregators collapsed (QWK 0.0–0.2). The stacker computes
+  <em>across-window</em> statistics (mean, std, percentiles of per-window embeddings) and a
+  gradient-boosted classifier learns "this video's per-window-mean embedding has high std →
+  unsteady → severity 2". That's the first place in the pipeline where between-window order /
+  variability becomes a signal. The learned aggregators had to discover this with ~200 examples
+  and didn't.
+</div>
+
+<h2 id="updrs">8. UPDRS 3.4 vs the model's actual time horizon</h2>
+
+<p>The clinical scoring criteria for item 3.4 (Finger Tapping) explicitly require:</p>
+
+<ul>
+  <li>Observe ≥ 10 taps with thumb and index finger as widely and quickly as possible.</li>
+  <li>Score on: <strong>speed</strong> (tap rate), <strong>amplitude</strong> (how far open),
+  <strong>hesitations / freezing</strong>, and <strong>amplitude decrement</strong> (does the
+  tap shrink over time).</li>
+</ul>
+
+<p>Compare that to what our pipeline can see in one forward pass:</p>
+
+<figure>
+  <svg viewBox="0 0 700 200" xmlns="http://www.w3.org/2000/svg" aria-label="Length scales: V-JEPA window vs eval segment overlap vs UPDRS 3.4 criteria.">
+    <!-- horizontal bar showing 10s -->
+    <text x="0" y="18" font-family="sans-serif" font-size="13" fill="#6a6a6a" font-weight="600">Length scales (10 s video, 30 fps, ~3 Hz tap)</text>
+
+    <!-- UPDRS criteria -->
+    <text x="0" y="50" font-family="sans-serif" font-size="12" fill="#1a1a1a">UPDRS 3.4 needs ≥ 10 taps for decrement scoring</text>
+    <rect x="0" y="56" width="600" height="14" fill="#1f7a47" opacity="0.7"/>
+    <text x="610" y="67" font-family="sans-serif" font-size="11" fill="#1f7a47" font-weight="600">~3.5 s</text>
+
+    <!-- single tap cycle -->
+    <text x="0" y="90" font-family="sans-serif" font-size="12" fill="#1a1a1a">One tap cycle at 3 Hz</text>
+    <rect x="0" y="96" width="50" height="14" fill="#c9430b" opacity="0.8"/>
+    <text x="60" y="107" font-family="sans-serif" font-size="11" fill="#c9430b" font-weight="600">0.33 s</text>
+
+    <!-- v-jepa window -->
+    <text x="0" y="130" font-family="sans-serif" font-size="12" fill="#1a1a1a">One V-JEPA forward pass (32 frames, stride 1)</text>
+    <rect x="0" y="136" width="184" height="14" fill="#265e8a" opacity="0.85"/>
+    <text x="194" y="147" font-family="sans-serif" font-size="11" fill="#265e8a" font-weight="600">1.07 s — ~3 taps</text>
+
+    <!-- one tubelet -->
+    <text x="0" y="170" font-family="sans-serif" font-size="12" fill="#1a1a1a">One temporal token (tubelet)</text>
+    <rect x="0" y="176" width="12" height="14" fill="#7a2906"/>
+    <text x="20" y="187" font-family="sans-serif" font-size="11" fill="#7a2906" font-weight="600">~67 ms</text>
+  </svg>
+  <figcaption>The signal that determines UPDRS 3.4 lives at the multi-second scale (green).
+  The model's atomic temporal unit is 67 ms (brown), and its forward pass spans only 1.07 s
+  (blue) — enough for ~3 tap cycles. Decrement is, in principle, partially visible to one
+  window (1st tap vs 3rd tap of that window). But the SSL loss doesn't reward encoding it,
+  and the eval averages away whatever ordering was present.</figcaption>
+</figure>
+
+<h2 id="fix">9. How to fix it, ranked</h2>
+
+<p>Each fix targets one of the three failure points (objective, time horizon, pooling).</p>
+
+<table>
+  <thead>
+    <tr><th>Fix</th><th>What it changes</th><th>Effort</th><th>Expected payoff</th></tr>
+  </thead>
+  <tbody>
+    <tr class="winner">
+      <td><strong>Temporal-derivative features over the cached embedding sequence</strong></td>
+      <td>Pooling. Adds Δemb, |Δemb|, FFT band power (2–6 Hz), autocorrelation lag, to the existing mean/std/percentile stack.</td>
+      <td><span class="pill good">low</span> a few hundred lines, no retraining</td>
+      <td>Tests whether rhythm is already <em>in</em> the embeddings but lost by averaging. High information-per-hour.</td>
+    </tr>
+    <tr>
+      <td><strong>Motion-biased inputs</strong> (frame differences or optical flow channels)</td>
+      <td>Input. Reframes the SSL problem so the input space privileges motion. The masked-prediction loss now is "predict masked motion trajectory from visible motion trajectory."</td>
+      <td><span class="pill warn">medium</span> recache embeddings on flow tensors</td>
+      <td>Direct attack on Observation A. Stays inside Meta's recipe.</td>
+    </tr>
+    <tr>
+      <td><strong>Larger <code>frame_step</code> (e.g. 2 or 4)</strong></td>
+      <td>Time horizon. Each forward pass covers 2.1 s or 4.3 s of footage at the same token budget.</td>
+      <td><span class="pill good">trivial</span> one config knob</td>
+      <td>Lets a single window see ≥ 6 taps. Cheapest thing to A/B.</td>
+    </tr>
+    <tr>
+      <td><strong>Kinematic distillation auxiliary loss</strong></td>
+      <td>Objective. Adds a regression head off the encoder that predicts MediaPipe tap-cycle scalars (rate, amplitude, decrement) during LoRA-FT.</td>
+      <td><span class="pill warn">medium</span> head + loss term, joint training</td>
+      <td>Only path to a deployable V-JEPA model that doesn't need MediaPipe at inference.</td>
+    </tr>
+    <tr>
+      <td><strong>Temporal-only masks</strong> (mask whole timesteps, not spatial columns)</td>
+      <td>Objective. Mask out a frame interval at all spatial positions. Reconstruction now requires temporal interpolation across a gap, not spatial inpainting with motion continuity.</td>
+      <td><span class="pill bad">high</span> real V-JEPA-recipe departure; flag it</td>
+      <td>The most principled fix to Observation A, but the most risk of breaking what already works.</td>
+    </tr>
+    <tr>
+      <td><strong>Cross-window attention at probe time</strong></td>
+      <td>Pooling. Replace the logit-mean with a transformer that takes the 12 per-window embeddings as a sequence and predicts severity.</td>
+      <td><span class="pill warn">medium</span> already attempted as "learned aggregator" and failed at N≈200</td>
+      <td>Right idea, wrong sample size. Worth revisiting only once the dataset is expanded (see <a href="#dataset">may19 dataset note</a>).</td>
+    </tr>
+    <tr>
+      <td>Stack more attentive-probe blocks / more segments</td>
+      <td>Pooling. Cosmetic.</td>
+      <td><span class="pill">low</span></td>
+      <td>Negligible. The encoder doesn't have the signal; pooling can't conjure it.</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="callout cool">
+  <strong>Recommended sequence:</strong>
+  <ol>
+    <li><strong>Cheap test of Observation C:</strong> add temporal-derivative + FFT features to the cached-stats stacker, rerun fold 0. If QWK jumps, rhythm is in the embeddings and we were just throwing it away.</li>
+    <li><strong>Cheap test of Observation B:</strong> rerun the attentive eval with <code>frame_step=2</code> (covers ~2.1 s per window). If QWK jumps, time horizon was the bottleneck.</li>
+    <li><strong>Then</strong> spend effort on motion inputs or kinematic distillation — informed by which of (1) and (2) moved the needle.</li>
+  </ol>
+  Both (1) and (2) are cheap, give independent diagnostic information, and don't commit to a major architecture change before the data tells us where the loss is being spent.
+</div>
+
+<h2 id="dataset">10. Footnote — the may19 dataset</h2>
+
+<p>The new <code>segments_meeting_tasks_720p30_may19/finger_tapping</code> dataset roughly doubles
+the clip count (671 vs 320 ok rows) and the subject count (308 vs 154). That changes the calculus
+for the "learned aggregator" approaches that previously collapsed at N≈200: a real cross-window
+attention head over 12 per-window embeddings might become learnable at N≈600.</p>
+
+<p>It does <strong>not</strong> change the analysis above — V-JEPA's pretext task still doesn't
+reward encoding rhythm, regardless of how many videos we train on. More data lets us learn a
+<em>pooler</em> on top, not a new <em>encoder</em>. To actually push the encoder, one of the
+objective- or input-level changes is still required.</p>
+
+<p class="footnote">
+  Source files: <code>configs/train_2_1/pd_hand/vitl384-lora-jepa-adapt-32f-step1-fold0.yaml</code>,
+  <code>configs/eval_2_1/pd_hand_item_3_4_fold0_vjepa2_1_vitl384_lora_e20_attentive.yaml</code>,
+  <code>app/vjepa_2_1/train.py</code>,
+  <code>src/datasets/clip_dataset.py</code>,
+  <code>docs/results/adaptive_window_item_3_4_fold0_status.md</code>.
+</p>
+
+</body>
+</html>

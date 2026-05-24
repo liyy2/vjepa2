@@ -56,7 +56,13 @@ def make_clipdataset(
     crop_scale=2.35,
     metadata_columns=None,
     metadata_categories=None,
+    adaptive_num_clips=False,
+    adaptive_duration_col="duration_s",
+    adaptive_max_clips=None,
+    adaptive_min_clips=1,
 ):
+    if adaptive_num_clips and collator is None:
+        collator = adaptive_clip_collate
     dataset = ClipDataset(
         data_paths=data_paths,
         datasets_weights=datasets_weights,
@@ -77,6 +83,10 @@ def make_clipdataset(
         crop_scale=crop_scale,
         metadata_columns=metadata_columns,
         metadata_categories=metadata_categories,
+        adaptive_num_clips=adaptive_num_clips,
+        adaptive_duration_col=adaptive_duration_col,
+        adaptive_max_clips=adaptive_max_clips,
+        adaptive_min_clips=adaptive_min_clips,
     )
 
     log_dir = pathlib.Path(log_dir) if log_dir else None
@@ -142,6 +152,10 @@ class ClipDataset(torch.utils.data.Dataset):
         crop_scale=2.35,
         metadata_columns=None,
         metadata_categories=None,
+        adaptive_num_clips=False,
+        adaptive_duration_col="duration_s",
+        adaptive_max_clips=None,
+        adaptive_min_clips=1,
     ):
         self.data_paths = [data_paths] if isinstance(data_paths, str) else list(data_paths)
         self.datasets_weights = datasets_weights
@@ -164,6 +178,10 @@ class ClipDataset(torch.utils.data.Dataset):
         self.crop_scale = float(crop_scale)
         self.metadata_columns = list(metadata_columns or [])
         self.metadata_categories = metadata_categories or {}
+        self.adaptive_num_clips = bool(adaptive_num_clips)
+        self.adaptive_duration_col = adaptive_duration_col
+        self.adaptive_max_clips = adaptive_max_clips
+        self.adaptive_min_clips = max(1, int(adaptive_min_clips or 1))
 
         if sum(v is not None for v in (fps, duration, frame_step)) != 1:
             raise ValueError(
@@ -235,7 +253,7 @@ class ClipDataset(torch.utils.data.Dataset):
         dataset_idx, _ = self.per_dataset_indices[index]
         frames_per_clip = self.dataset_fpcs[dataset_idx]
 
-        buffer, clip_indices, coverage = self.loadvideo_decord(sample, frames_per_clip)
+        buffer, clip_indices, coverage = self.loadvideo_decord(sample, frames_per_clip, metadata)
         if len(buffer) == 0:
             return
         coverage["sample_index"] = int(index)
@@ -246,7 +264,7 @@ class ClipDataset(torch.utils.data.Dataset):
 
         def split_into_clips(video):
             fpc = frames_per_clip
-            return [video[i * fpc : (i + 1) * fpc] for i in range(self.num_clips)]
+            return [video[i * fpc : (i + 1) * fpc] for i in range(len(clip_indices))]
 
         if self.shared_transform is not None:
             buffer = self.shared_transform(buffer)
@@ -258,7 +276,7 @@ class ClipDataset(torch.utils.data.Dataset):
             return buffer, label, clip_indices, coverage, self._metadata_features(metadata)
         return buffer, label, clip_indices, coverage
 
-    def loadvideo_decord(self, sample, fpc):
+    def loadvideo_decord(self, sample, fpc, metadata=None):
         fname = sample
         if not os.path.exists(fname):
             warnings.warn(f"video path not found {fname=}")
@@ -289,6 +307,15 @@ class ClipDataset(torch.utils.data.Dataset):
 
         assert frame_step is not None and frame_step > 0
         clip_len = int(fpc * frame_step)
+
+        if self.adaptive_num_clips:
+            return self._loadvideo_decord_adaptive(
+                vr=vr,
+                fpc=fpc,
+                frame_step=frame_step,
+                clip_len=clip_len,
+                metadata=metadata or {},
+            )
 
         if self.filter_short_videos and len(vr) < clip_len:
             warnings.warn(f"skipping video of length {len(vr)}")
@@ -344,6 +371,48 @@ class ClipDataset(torch.utils.data.Dataset):
         buffer = vr.get_batch(all_indices).asnumpy()
         return buffer, clip_indices, coverage
 
+    def _loadvideo_decord_adaptive(self, vr, fpc, frame_step, clip_len, metadata):
+        total_frames = len(vr)
+        if total_frames < max(frame_step, 1):
+            warnings.warn(f"skipping video of length {total_frames} (frame_step={frame_step})")
+            return [], None, None
+
+        duration_s = _metadata_duration_seconds(metadata, self.adaptive_duration_col)
+        if duration_s is None:
+            try:
+                video_fps = float(vr.get_avg_fps() or 30.0)
+            except Exception:
+                video_fps = 30.0
+            duration_s = total_frames / max(video_fps, 1.0e-6)
+        requested_num_clips = max(self.adaptive_min_clips, int(math.ceil(float(duration_s))))
+        num_clips = requested_num_clips
+        if self.adaptive_max_clips is not None:
+            num_clips = min(num_clips, int(self.adaptive_max_clips))
+
+        max_start = max(0, total_frames - clip_len)
+        # Always linspace so:
+        # (a) when num_clips * clip_len <= total_frames we get even non-overlapping spacing,
+        # (b) when num_clips * clip_len >  total_frames adjacent segments slightly overlap
+        #     uniformly (avoids the previous bug where the final K starts all collapsed to
+        #     max_start, producing duplicate segments).
+        if num_clips > 1:
+            starts = np.linspace(0, max_start, num=num_clips).round().astype(np.int64).tolist()
+        else:
+            starts = [0]
+        all_indices, clip_indices = [], []
+        for start_index in starts:
+            indices = start_index + np.arange(fpc, dtype=np.int64) * int(frame_step)
+            indices = np.clip(indices, 0, total_frames - 1).astype(np.int64)
+            clip_indices.append(indices)
+            all_indices.extend(indices.tolist())
+
+        coverage = _frame_coverage(all_indices, total_frames=total_frames)
+        coverage["num_segments"] = int(num_clips)
+        coverage["adaptive_requested_segments"] = int(requested_num_clips)
+        coverage["adaptive_duration_s"] = float(duration_s)
+        buffer = vr.get_batch(all_indices).asnumpy()
+        return buffer, clip_indices, coverage
+
     def _metadata_features(self, metadata: dict[str, Any]) -> torch.Tensor:
         features: list[float] = []
         for column in getattr(self, "metadata_columns", []):
@@ -365,6 +434,93 @@ def _has_skip_flag(flags: str) -> bool:
     if not text:
         return False
     return any(token in text for token in SKIP_FLAG_TOKENS)
+
+
+def _metadata_duration_seconds(metadata: dict[str, Any], duration_col: str | None) -> float | None:
+    candidates = []
+    if duration_col:
+        candidates.append(duration_col)
+    candidates.extend(["duration_s", "clip_duration_s", "duration", "end_s"])
+    for key in candidates:
+        if key not in metadata:
+            continue
+        try:
+            value = float(metadata.get(key))
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(value) and value > 0:
+            if key == "end_s" and "start_s" in metadata:
+                try:
+                    start_s = float(metadata.get("start_s"))
+                    if math.isfinite(start_s):
+                        value = value - start_s
+                except (TypeError, ValueError):
+                    pass
+            if value > 0:
+                return value
+    return None
+
+
+def adaptive_clip_collate(batch):
+    """Pad variable-length per-video clip windows and emit a segment mask.
+
+    Returns the same leading tuple as the fixed-grid ClipDataset:
+    ``clips, labels, clip_indices, coverage``. A boolean ``segment_mask`` is
+    appended as the last tensor; metadata features, when present, remain before
+    the mask.
+    """
+    batch = [sample for sample in batch if sample is not None]
+    if not batch:
+        raise ValueError("adaptive_clip_collate received an empty batch")
+
+    labels = torch.tensor([int(sample[1]) for sample in batch], dtype=torch.long)
+    max_segments = max(len(sample[0]) for sample in batch)
+    num_views = len(batch[0][0][0])
+    segment_mask = torch.zeros(len(batch), max_segments, dtype=torch.bool)
+
+    clips = []
+    clip_indices = []
+    for segment_idx in range(max_segments):
+        views = []
+        for view_idx in range(num_views):
+            tensors = []
+            for batch_idx, sample in enumerate(batch):
+                sample_clips = sample[0]
+                if segment_idx < len(sample_clips):
+                    tensors.append(sample_clips[segment_idx][view_idx])
+                    segment_mask[batch_idx, segment_idx] = True
+                else:
+                    tensors.append(torch.zeros_like(sample_clips[0][view_idx]))
+            views.append(torch.stack(tensors, dim=0))
+        clips.append(views)
+
+        index_tensors = []
+        for sample in batch:
+            sample_indices = sample[2]
+            if segment_idx < len(sample_indices):
+                index_tensors.append(torch.as_tensor(sample_indices[segment_idx], dtype=torch.long))
+            else:
+                index_tensors.append(torch.zeros_like(torch.as_tensor(sample_indices[0], dtype=torch.long)))
+        clip_indices.append(torch.stack(index_tensors, dim=0))
+
+    coverage = _collate_coverage([sample[3] for sample in batch])
+    has_metadata = len(batch[0]) > 4
+    if has_metadata:
+        metadata_features = torch.stack([sample[4] for sample in batch], dim=0)
+        return clips, labels, clip_indices, coverage, metadata_features, segment_mask
+    return clips, labels, clip_indices, coverage, segment_mask
+
+
+def _collate_coverage(rows: list[dict[str, Any]]) -> dict[str, torch.Tensor | list[Any]]:
+    keys = sorted({key for row in rows for key in row})
+    out = {}
+    for key in keys:
+        values = [row.get(key, float("nan")) for row in rows]
+        try:
+            out[key] = torch.tensor(values, dtype=torch.float32)
+        except (TypeError, ValueError):
+            out[key] = values
+    return out
 
 
 def _frame_coverage(indices: list[int], total_frames: int) -> dict[str, int | float]:

@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Clean hybrid verdict — V-JEPA does not beat kinematic alone</title>
+<style>
+  body { background: #fffdf8; color: #1a1a1a;
+         font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+         max-width: 1080px; margin: 36px auto; padding: 0 26px; line-height: 1.6; font-size: 15.5px; }
+  h1 { font-size: 26px; margin-bottom: 4px; }
+  h2 { font-size: 19px; margin-top: 32px; padding-bottom: 4px; border-bottom: 1px solid #d8d4cc; }
+  code { font-family: "JetBrains Mono", Menlo, monospace; font-size: 12.5px; background: #faf7f0; padding: 1px 5px; border-radius: 3px; }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 13.5px; }
+  th { background: #f3efe5; text-align: left; font-weight: 600; }
+  th, td { border: 1px solid #d8d4cc; padding: 7px 11px; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  tr.target td { background: #e7f2eb; font-weight: 700; }
+  tr.bad td { background: #fef0f0; color: #6a6a6a; }
+  tr.leak td { background: #fff6e0; }
+  .callout { background: #f3efe5; border-left: 3px solid #c9430b; padding: 12px 16px; margin: 14px 0; font-size: 14px; }
+  .callout.good { background: #e7f2eb; border-left-color: #1f7a47; }
+  .callout.bad { background: #fef0f0; border-left-color: #b22222; }
+  .callout.cool { background: #eef3f7; border-left-color: #265e8a; }
+  .pill { display: inline-block; padding: 1px 9px; border-radius: 11px; font-size: 11px;
+          background: #f3efe5; color: #c9430b; font-weight: 600; }
+  .pill.good { background: #e7f2eb; color: #1f7a47; }
+  .pill.bad { background: #fef0f0; color: #b22222; }
+  .pill.warn { background: #fff6e0; color: #8a6a00; }
+</style>
+</head>
+<body>
+
+<h1>Clean hybrid verdict — V-JEPA does not cleanly beat kinematic on may19 fold 0</h1>
+<p style="color:#6a6a6a">10-seed ExtraTrees (n_est=1000, balanced, max_features=sqrt, min_samples_leaf=2), 9 feature configurations, may19 fold 0 (107 val).</p>
+
+<div class="callout bad">
+  <strong>Honest result:</strong> In the clean (no item 3.5 label leak) setting,
+  the best baseline is <code>kin + dx</code> at <strong>QWK 0.559 ± 0.023</strong>.
+  Adding V-JEPA features (any subset tested) does not improve this — all V-JEPA-augmented
+  variants score between 0.529 and 0.553. The earlier +0.025 lift was conditional on the
+  item 3.5 UPDRS label being in the feature set.
+</div>
+
+<h2>1. Full ablation, 10 seeds</h2>
+
+<table>
+  <thead>
+    <tr><th>Feature set</th><th class="num">Cols</th><th class="num">QWK mean ± std</th><th class="num">QWK min</th><th class="num">QWK max</th><th>Note</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>kin only (no meta, pure motor)</td><td class="num">99</td><td class="num">0.397 ± 0.045</td><td class="num">0.306</td><td class="num">0.452</td><td>video-only severity</td></tr>
+    <tr class="target"><td><strong>kin + dx (no item 3.5)</strong></td><td class="num">106</td><td class="num"><strong>0.559 ± 0.023</strong></td><td class="num">0.523</td><td class="num">0.598</td><td><strong>clean baseline</strong></td></tr>
+    <tr class="bad"><td>kin + dx + V-JEPA (all 96 cols)</td><td class="num">202</td><td class="num">0.529 ± 0.020</td><td class="num">0.503</td><td class="num">0.567</td><td>V-JEPA hurts (−0.030)</td></tr>
+    <tr class="bad"><td>kin + dx + V-JEPA FFT only (48)</td><td class="num">154</td><td class="num">0.544 ± 0.025</td><td class="num">0.493</td><td class="num">0.572</td><td>V-JEPA hurts (−0.015)</td></tr>
+    <tr class="bad"><td>kin + dx + V-JEPA stats only (48)</td><td class="num">154</td><td class="num">0.553 ± 0.016</td><td class="num">0.527</td><td class="num">0.581</td><td>V-JEPA ≈ neutral (−0.006)</td></tr>
+    <tr class="bad"><td>kin + dx + V-JEPA top-16 PCA means</td><td class="num">122</td><td class="num">0.550 ± 0.019</td><td class="num">0.505</td><td class="num">0.570</td><td>V-JEPA hurts (−0.009)</td></tr>
+    <tr class="leak"><td><strong>kin + all_meta</strong> (with item 3.5)</td><td class="num">118</td><td class="num">0.725 ± 0.010</td><td class="num">0.704</td><td class="num">0.740</td><td>leaky baseline (= "old_118")</td></tr>
+    <tr class="leak"><td>kin + all_meta + V-JEPA</td><td class="num">214</td><td class="num">0.750 ± 0.014</td><td class="num">0.723</td><td class="num">0.769</td><td>+0.025 lift IS real, but on a leaky baseline</td></tr>
+    <tr><td>V-JEPA only (no kin/dx/meta)</td><td class="num">96</td><td class="num">0.192 ± 0.025</td><td class="num">0.144</td><td class="num">0.238</td><td>standalone</td></tr>
+  </tbody>
+</table>
+
+<h2>2. Why this matters</h2>
+
+<p>The <code>old_118</code> baseline you'd previously been calling "kinematic" (QWK 0.7277) includes <strong>12 columns derived from the rater's UPDRS item 3.5 score</strong> for hand movements on the same and opposite hand at the same visit. Within a patient and visit, items 3.4 (finger tap) and 3.5 (hand movements) are highly correlated, so those 12 columns carry strong signal that is <em>not derived from the hand-tap video</em> — it comes from clinical scoring of the related task.</p>
+
+<p>Stripping the 12 item 3.5 columns out:</p>
+
+<ul>
+  <li>The "kinematic" baseline drops from <strong>0.725 → 0.559</strong> QWK.</li>
+  <li>V-JEPA's small lift over the leaky baseline (+0.025) <strong>reverses to a small hurt</strong> (−0.006 to −0.030) over the clean baseline.</li>
+  <li>The V-JEPA contribution was specific to the <em>residuals</em> the ExtraTrees couldn't capture from item 3.5 + kinematic — when item 3.5 is removed, that residual structure is no longer the bottleneck.</li>
+</ul>
+
+<h2>3. What the directions 1 + 2 sweep together tell us</h2>
+
+<table>
+  <thead><tr><th>Question</th><th>Answer (on may19 fold 0)</th></tr></thead>
+  <tbody>
+    <tr>
+      <td>Can V-JEPA features predict kinematic feature scalars? (direction 1)</td>
+      <td>No. Best mean R² = −0.117 across 14 kinematic scalars over 54 configurations. Decrement / amplitude / velocity stay deeply negative; only spectral band power reaches R² ≈ 0.1.</td>
+    </tr>
+    <tr>
+      <td>Pure-V-JEPA QWK ceiling? (direction 1)</td>
+      <td>QWK ≈ 0.555 (multi-scale adaptive combiner top-8 ensemble). Far below 0.728 leaky kinematic and below 0.559 clean kin+dx.</td>
+    </tr>
+    <tr>
+      <td>Does kin + V-JEPA outperform kin alone, with item 3.5 leak in both? (direction 2, leaky)</td>
+      <td>Yes. +0.025 QWK mean, 9/10 seeds, Wilcoxon p=0.002. Both sides use item 3.5; the V-JEPA contribution is real on top of that base.</td>
+    </tr>
+    <tr>
+      <td>Does kin + V-JEPA outperform kin alone, without item 3.5 leak in either? (direction 2, clean)</td>
+      <td><strong>No</strong>. V-JEPA additions either reduce QWK or leave it unchanged (best subset: stats-only, −0.006 from clean baseline).</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="callout cool">
+  <strong>Bottom line.</strong> V-JEPA features as extracted from the available caches don't add value on top of a video-only kinematic + diagnosis baseline at may19 fold 0's sample size. They DO add value on top of the leaky kin+item35 baseline, but that's because the latter has so much non-video signal that V-JEPA can carve out residual cases. In a fair video-only setup, the kinematic features alone (with dx) remain the better choice.
+</div>
+
+<h2>4. What could change this answer</h2>
+
+<p>The clean comparison is conclusive at <em>this</em> dataset size with <em>these</em> V-JEPA features extracted from a pretrained encoder. Three directions could plausibly flip it:</p>
+
+<ol>
+  <li><strong>More labeled data.</strong> 404 train / 107 val is small for a 200-dim feature space ExtraTrees. 5-fold CV averaging or 10x more clips would reduce variance and might reveal a small but real V-JEPA contribution.</li>
+  <li><strong>Train the encoder for finger-tap rhythm.</strong> The R² scan showed V-JEPA's pretrained features lack tap-amplitude / decrement information. A custom SSL pretext that demands frequency-of-motion encoding (motion-biased inputs, or temporal-only masking) might give different features.</li>
+  <li><strong>Honest subject-OOF stacking</strong> of the V-JEPA combiner's <em>predictions</em> (not raw features) on top of kinematic. The combiner already does the per-clip aggregation; stacking it as a 5-prob feature might behave differently than raw V-JEPA summary stats.</li>
+</ol>
+
+<p>None of these are quick wins at the current dataset scale. The empirical answer on may19 fold 0: <strong>kinematic + dx is the right baseline for video-only severity prediction, and V-JEPA does not improve it.</strong></p>
+
+<p style="color:#6a6a6a; font-size:12.5px; margin-top:30px;">
+  Output JSON: <code>outputs/foundation_model_minimal_hand_tasks_may19/hybrid/item_3_4/fold_0/multiseed_ablation_clean.json</code>.
+  Generator: <code>scripts/pd_hand/hybrid_multiseed.py</code>.
+</p>
+
+</body>
+</html>

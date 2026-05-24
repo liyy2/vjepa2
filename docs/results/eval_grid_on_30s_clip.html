@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Eval grid: 12 segments × 32 frames × stride 1 on a 30 s video</title>
+<style>
+  body { background: #fffdf8; color: #1a1a1a;
+         font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+         max-width: 1020px; margin: 36px auto; padding: 0 26px; line-height: 1.6; font-size: 15.5px; }
+  h1 { font-size: 26px; margin-bottom: 4px; }
+  h2 { font-size: 19px; margin-top: 36px; padding-bottom: 4px; border-bottom: 1px solid #d8d4cc; }
+  code { font-family: "JetBrains Mono", Menlo, monospace; font-size: 12.8px;
+         background: #faf7f0; padding: 1px 5px; border-radius: 3px; }
+  .lede { color: #6a6a6a; font-size: 16px; }
+  .callout { background: #fff6e0; border-left: 3px solid #b88a00; padding: 10px 16px; margin: 14px 0; font-size: 14.5px; }
+  .callout.bad { background: #fef0f0; border-left-color: #b22222; }
+  .callout.good { background: #e7f2eb; border-left-color: #1f7a47; }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 13.8px; }
+  th { background: #f3efe5; text-align: left; font-weight: 600; }
+  th, td { border: 1px solid #d8d4cc; padding: 7px 11px; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  figure { margin: 18px 0; padding: 14px; background: #faf7f0;
+           border: 1px solid #d8d4cc; border-radius: 6px; }
+  figcaption { text-align: center; color: #6a6a6a; font-size: 12.5px; margin-top: 8px; }
+  ul { padding-left: 22px; } li { margin: 4px 0; }
+</style>
+</head>
+<body>
+
+<h1>What <code>num_segments=12 · frames_per_clip=32 · frame_step=1</code> actually does on a 30 s clip</h1>
+<p class="lede">
+  This is the configuration the dense V-JEPA cache uses. On a 10 s clip it over-samples
+  with heavy overlap; on a 30 s clip it <em>under</em>-samples and leaves 57% of the video
+  unseen. Below is the math and a diagram.
+</p>
+
+<h2>1. The math</h2>
+
+<p>Inputs given to the multi-clip sampler:</p>
+
+<table>
+  <tr><th>Parameter</th><th>Value</th><th>Meaning</th></tr>
+  <tr><td><code>num_segments</code></td><td>12</td><td>Number of independent forward passes per video</td></tr>
+  <tr><td><code>frames_per_clip</code></td><td>32</td><td>Frames per forward pass</td></tr>
+  <tr><td><code>frame_step</code></td><td>1</td><td>Stride within a pass: 1 = consecutive frames</td></tr>
+  <tr><td><code>tubelet_size</code></td><td>2</td><td>Temporal token = 2 adjacent frames</td></tr>
+  <tr><td>fps</td><td>30</td><td>Video frame rate</td></tr>
+</table>
+
+<p>One segment covers <strong>32 frames × 1 stride / 30 fps ≈ 1.07 s</strong> of footage and
+produces <strong>16 temporal tokens</strong> after tubelet pooling. The full video is then
+chopped into 12 such segments whose <em>starts</em> are placed uniformly across the available
+range. With <code>L</code> = total frames, segments are spaced by
+<code>(L − 32) / 11</code> frames between consecutive starts.</p>
+
+<h2>2. On a 30 s clip (900 frames)</h2>
+
+<table>
+  <tr><th>Quantity</th><th>Calculation</th><th>Value</th></tr>
+  <tr><td>Total frames</td><td>30 s × 30 fps</td><td class="num">900</td></tr>
+  <tr><td>Start range</td><td>900 − 32</td><td class="num">868</td></tr>
+  <tr><td>Spacing between adjacent segment starts</td><td>868 / 11</td><td class="num">78.9 frames ≈ 2.63 s</td></tr>
+  <tr><td>Each segment length</td><td>32 frames</td><td class="num">~1.07 s</td></tr>
+  <tr><td><strong>Gap of unseen frames between adjacent segments</strong></td><td>78.9 − 32</td><td class="num"><strong>46.9 frames ≈ 1.56 s</strong></td></tr>
+  <tr><td>Total unique frames seen</td><td>12 × 32 (no overlap)</td><td class="num">384</td></tr>
+  <tr><td><strong>Coverage</strong></td><td>384 / 900</td><td class="num"><strong>42.7%</strong></td></tr>
+  <tr><td><strong>Frames never observed</strong></td><td>900 − 384</td><td class="num"><strong>516 (57.3%)</strong></td></tr>
+  <tr><td>Temporal tokens per clip</td><td>12 × (32 / 2)</td><td class="num">192</td></tr>
+  <tr><td>Wall time per token</td><td>2 / 30 s</td><td class="num">~67 ms</td></tr>
+</table>
+
+<figure>
+  <svg viewBox="0 0 980 200" xmlns="http://www.w3.org/2000/svg" aria-label="Segment placement on a 30s clip">
+    <!-- Background bar = full 30s clip -->
+    <text x="0" y="14" font-size="11" fill="#6a6a6a">Full 30 s video (900 frames)</text>
+    <rect x="0" y="22" width="900" height="22" fill="#ece4d3" stroke="#b09a6e"/>
+
+    <!-- Tick marks every 5s -->
+    <g stroke="#a0917a" stroke-width="0.5">
+      <line x1="150" y1="22" x2="150" y2="48"/>
+      <line x1="300" y1="22" x2="300" y2="48"/>
+      <line x1="450" y1="22" x2="450" y2="48"/>
+      <line x1="600" y1="22" x2="600" y2="48"/>
+      <line x1="750" y1="22" x2="750" y2="48"/>
+    </g>
+    <g font-size="10" fill="#6a6a6a">
+      <text x="0" y="58">0 s</text>
+      <text x="135" y="58">5 s</text>
+      <text x="285" y="58">10 s</text>
+      <text x="435" y="58">15 s</text>
+      <text x="585" y="58">20 s</text>
+      <text x="735" y="58">25 s</text>
+      <text x="868" y="58">30 s</text>
+    </g>
+
+    <!-- 12 segments placed -->
+    <!-- Scale: 900 frames maps to 900 px in viewBox (px-per-frame = 1). Segment starts at frame floor(i * 868 / 11) for i=0..11 -->
+    <!-- starts: 0, 79, 158, 237, 316, 394, 473, 552, 631, 710, 789, 868. Each width = 32. -->
+    <g fill="#c9430b" opacity="0.92" stroke="#7a2906">
+      <rect x="0"   y="80" width="32" height="22"/>
+      <rect x="79"  y="80" width="32" height="22"/>
+      <rect x="158" y="80" width="32" height="22"/>
+      <rect x="237" y="80" width="32" height="22"/>
+      <rect x="316" y="80" width="32" height="22"/>
+      <rect x="394" y="80" width="32" height="22"/>
+      <rect x="473" y="80" width="32" height="22"/>
+      <rect x="552" y="80" width="32" height="22"/>
+      <rect x="631" y="80" width="32" height="22"/>
+      <rect x="710" y="80" width="32" height="22"/>
+      <rect x="789" y="80" width="32" height="22"/>
+      <rect x="868" y="80" width="32" height="22"/>
+    </g>
+    <text x="0" y="76" font-size="11" fill="#7a2906" font-weight="600">12 segments × 32 frames @ stride 1 (~1.07 s each)</text>
+
+    <!-- Gaps -->
+    <text x="0" y="125" font-size="11" fill="#b22222" font-weight="600">Gaps of ~1.56 s where no frame is seen by the encoder</text>
+    <g fill="#b22222" opacity="0.18">
+      <rect x="32"  y="130" width="47" height="22"/>
+      <rect x="111" y="130" width="47" height="22"/>
+      <rect x="190" y="130" width="47" height="22"/>
+      <rect x="269" y="130" width="47" height="22"/>
+      <rect x="348" y="130" width="46" height="22"/>
+      <rect x="426" y="130" width="47" height="22"/>
+      <rect x="505" y="130" width="47" height="22"/>
+      <rect x="584" y="130" width="47" height="22"/>
+      <rect x="663" y="130" width="47" height="22"/>
+      <rect x="742" y="130" width="47" height="22"/>
+      <rect x="821" y="130" width="47" height="22"/>
+    </g>
+
+    <!-- Total counts -->
+    <text x="0" y="180" font-size="12.5" fill="#1a1a1a">
+      <tspan fill="#7a2906" font-weight="600">384 frames observed</tspan> ·
+      <tspan fill="#b22222" font-weight="600">516 frames never seen (57%)</tspan>
+    </text>
+  </svg>
+  <figcaption>12 segments span only 12.8 s of footage out of 30 s. Each red gap is ~1.6 s.</figcaption>
+</figure>
+
+<h2>3. Why this matters for UPDRS 3.4 (finger tapping)</h2>
+
+<p>The clinical scoring criteria for item 3.4 require observation of ≥10 taps with explicit
+attention to <em>speed, amplitude, hesitations, and <strong>amplitude decrement</strong></em>.
+Decrement is by definition a multi-second phenomenon. With this eval grid:</p>
+
+<table>
+  <tr><th></th><th>Per segment (within 1.07 s)</th><th>Across the 30 s clip</th></tr>
+  <tr><td>Taps observed @ 3 Hz</td><td class="num">~3 taps</td><td class="num">~36 taps in segments + ~55 in gaps</td></tr>
+  <tr><td>Tubelets / cycle</td><td>~5 tubelets per tap (67 ms each)</td><td>—</td></tr>
+  <tr><td>Decrement visible within</td><td>Impossible — too few taps</td><td>In principle yes, but the head only sees segment N's pooled summary</td></tr>
+</table>
+
+<div class="callout bad">
+  <strong>The structural problem.</strong> Within one segment (~3 taps), the model cannot
+  measure decrement — there aren't enough cycles to compare. Across segments, the
+  information about "tap amplitude in segment N vs segment N+11" would have to survive (a)
+  the encoder's mean spatial pool, (b) the gap of 1.56 s between adjacent segments, and (c)
+  the downstream pooling. Even if (a) and (c) are fixed by an order-aware combiner, (b)
+  loses 57% of the clip outright.
+</div>
+
+<h2>4. Comparison: how the same grid behaves on different clip lengths</h2>
+
+<table>
+  <thead>
+    <tr>
+      <th>Clip length</th>
+      <th>Total frames</th>
+      <th>Gap between segment starts</th>
+      <th>Adjacent-segment overlap / gap</th>
+      <th>Coverage</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr><td>5 s</td><td class="num">150</td><td class="num">10.7 frames (0.36 s)</td><td>21.3 frames overlap (0.71 s) per pair</td><td class="num">100% (heavy redundancy)</td></tr>
+    <tr><td>8 s</td><td class="num">240</td><td class="num">18.9 frames (0.63 s)</td><td>13.1 frames overlap (0.44 s)</td><td class="num">100%</td></tr>
+    <tr><td>10 s</td><td class="num">300</td><td class="num">24.4 frames (0.81 s)</td><td>7.6 frames overlap (0.25 s)</td><td class="num">100%</td></tr>
+    <tr><td>13.5 s</td><td class="num">405</td><td class="num">33.9 frames (1.13 s)</td><td><strong>1.9 frames gap (0.06 s)</strong></td><td class="num">~99.5%</td></tr>
+    <tr><td>15 s</td><td class="num">450</td><td class="num">38.0 frames (1.27 s)</td><td>6.0 frames gap (0.20 s)</td><td class="num">~85%</td></tr>
+    <tr><td>20 s</td><td class="num">600</td><td class="num">51.6 frames (1.72 s)</td><td>19.6 frames gap (0.65 s)</td><td class="num">~64%</td></tr>
+    <tr><td><strong>30 s</strong></td><td class="num"><strong>900</strong></td><td class="num"><strong>78.9 frames (2.63 s)</strong></td><td><strong>46.9 frames gap (1.56 s)</strong></td><td class="num"><strong>42.7%</strong></td></tr>
+    <tr><td>42 s (longest may19 clip)</td><td class="num">1260</td><td class="num">111.6 frames (3.72 s)</td><td>79.6 frames gap (2.65 s)</td><td class="num">~30%</td></tr>
+  </tbody>
+</table>
+
+<p>The break-even point is around <strong>13.5 s</strong>. Below that, segments overlap
+(redundant info, doesn't hurt accuracy). Above that, gaps open up and grow linearly.</p>
+
+<h2>5. What this implies for our results</h2>
+
+<p>Earlier diagnostics (from <code>adaptive_window_item_3_4_fold0_status.md</code>) split the
+fold-0 val into length bins on the old dataset:</p>
+
+<table>
+  <thead><tr><th>Bin</th><th>Acc</th><th>QWK</th></tr></thead>
+  <tbody>
+    <tr><td>≤ 8.5 s</td><td class="num">75.0%</td><td class="num">0.816</td></tr>
+    <tr><td>8.5–14 s</td><td class="num">45.7%</td><td class="num">0.385</td></tr>
+    <tr><td>&gt; 14 s</td><td class="num">25.0%</td><td class="num">0.308</td></tr>
+  </tbody>
+</table>
+
+<p>QWK drops by <strong>0.5</strong> from the short-clip bin to the long-clip bin — almost
+the entire gap to kinematic. A meaningful portion of the V-JEPA ceiling has nothing to do
+with feature quality; it's the eval-grid losing the long clips.</p>
+
+<div class="callout good">
+  <strong>Two clean fixes for the 30 s case:</strong>
+  <ul>
+    <li><strong>Adaptive windows</strong>: set <code>num_segments = ⌈duration_s⌉</code> instead of 12. For a 30 s clip that's 30 windows × 32 frames @ stride 1 = 960 frames at stride spacing 28.6 ≈ 100% coverage. Already implemented in <code>ClipDataset</code> via <code>adaptive_num_clips=True</code>.</li>
+    <li><strong>Bigger <code>frame_step</code> for long clips</strong>: <code>frame_step=3</code> turns each 32-frame pass into 32 × 3 / 30 ≈ 3.2 s of footage. 12 such passes cover 38.4 s of "footage-time" — exceeds the 30 s clip, restoring full coverage.</li>
+  </ul>
+  Both are already supported by <code>cache_vjepa21_temporal_embeddings.py</code>. We've used
+  <code>frame_step=2</code> (the "coarse" cache) and adaptive windows in earlier
+  experiments. Neither closed the QWK gap on may19 fold 0, but both are valid mitigations
+  for the long-clip subset specifically.
+</div>
+
+<p style="color: #6a6a6a; font-size: 12.5px; margin-top: 30px;">
+  Source: <code>src/datasets/clip_dataset.py</code> (sampler), <code>configs/eval_2_1/pd_hand_may19_item_3_4_fold0_vjepa2_1_vitl384_corn_accuracy_dense.yaml</code>,
+  <code>adaptive_window_item_3_4_fold0_status.md</code> (length-bin diagnostic),
+  <code>vjepa_appearance_vs_rhythm.html</code> (the original "what V-JEPA sees" explainer).
+</p>
+
+</body>
+</html>

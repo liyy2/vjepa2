@@ -85,11 +85,15 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--pca-dim", type=int, default=128)
     p.add_argument("--segment-length", type=int, default=0,
                    help="If >0, override segment_length on all configs (e.g., 32 for 64-frame cache).")
-    p.add_argument("--grid", default="velocity", choices=["velocity", "mega_seeds"])
+    p.add_argument("--grid", default="velocity", choices=["velocity", "mega_seeds", "quick_recipes"])
     p.add_argument("--rank-by", default="qwk", choices=["acc", "qwk"])
     p.add_argument("--start-config", type=int, default=1, help="1-indexed inclusive")
     p.add_argument("--end-config", type=int, default=0, help="1-indexed inclusive; 0 means last")
     p.add_argument("--max-configs", type=int, default=0)
+    p.add_argument("--sample-balanced-normalization", action="store_true",
+                   help="Average per-clip moments before standardizing so long adaptive clips do not dominate.")
+    p.add_argument("--pca-tokens-per-sample", type=int, default=0,
+                   help="If >0, fit PCA from up to this many evenly spaced valid tokens per clip.")
     p.add_argument("--wandb-project", default="")
     p.add_argument("--wandb-run-name", default="")
     p.add_argument("--wandb-mode", default=os.environ.get("WANDB_MODE", "online"))
@@ -114,6 +118,8 @@ def build_grid(name: str) -> list[TrainConfig]:
         return _velocity_grid()
     if name == "mega_seeds":
         return _mega_seeds_grid()
+    if name == "quick_recipes":
+        return _quick_recipes_grid()
     raise ValueError(f"unknown grid {name}")
 
 
@@ -176,6 +182,31 @@ def _mega_seeds_grid() -> list[TrainConfig]:
     return configs
 
 
+def _quick_recipes_grid() -> list[TrainConfig]:
+    """Small version of the known-good recipe family for adaptive-cache smoke runs."""
+    seeds = [0, 17, 42, 98]
+    configs: list[TrainConfig] = []
+    base_specs = [
+        # (loss, mixup, cw,         drop, hd,  bins, fft, fft_mode,      use_vel, lr)
+        ("ce",   0.2, "balanced",   0.5,  256, 24,   0,   "per_segment", True,    3e-4),
+        ("ce",   0.2, "balanced",   0.5,  256, 24,   4,   "per_segment", True,    3e-4),
+        ("ce",   0.0, "balanced",   0.5,  256, 24,   0,   "per_segment", True,    3e-4),
+        ("ce",   0.0, "balanced",   0.5,  256, 24,   0,   "global",      False,   1e-3),
+        ("ce",   0.0, "none",       0.5,  256, 24,   0,   "global",      False,   1e-3),
+        ("corn", 0.0, "none",       0.5,  256, 24,   0,   "global",      False,   1e-3),
+    ]
+    for seed in seeds:
+        for (loss, mixup, cw, drop, hd, bins, fft_bands, fft_mode, use_vel, lr) in base_specs:
+            configs.append(TrainConfig(
+                seed=seed, lr=lr, weight_decay=1e-2, dropout=drop,
+                hidden_dim=hd, temporal_bins=bins,
+                class_weight=cw, loss=loss, mixup_alpha=mixup,
+                fft_bands=fft_bands, fft_mode=fft_mode,
+                use_velocity=use_vel,
+            ))
+    return configs
+
+
 # -----------------------------------------------------------------------------
 # Model — stats_mlp only (other model types were dominated in our sweeps)
 # -----------------------------------------------------------------------------
@@ -219,9 +250,14 @@ class TemporalStatsMLP(nn.Module):
             nn.Linear(hidden_dim, num_out),
         )
 
-    def forward(self, x):
+    def forward(self, x, mask=None):
         x = self.proj(x)
-        chunks = torch.chunk(x, self.temporal_bins, dim=1)
+        if mask is not None:
+            return self._forward_masked(x, mask.to(device=x.device, dtype=torch.bool))
+        return self._forward_unmasked(x)
+
+    def _forward_unmasked(self, x):
+        chunks = torch.tensor_split(x, self.temporal_bins, dim=1)
         bin_mean = [c.mean(dim=1) for c in chunks]
         bin_std = [c.std(dim=1, unbiased=False) for c in chunks]
         features = [
@@ -263,6 +299,100 @@ class TemporalStatsMLP(nn.Module):
                     features.append(torch.log1p(band.mean(dim=1)))
                     features.append(torch.log1p(band.std(dim=1, unbiased=False)))
         return self.net(torch.cat(features, dim=1))
+
+    def _forward_masked(self, x, mask):
+        chunks = torch.tensor_split(x, self.temporal_bins, dim=1)
+        mask_chunks = torch.tensor_split(mask, self.temporal_bins, dim=1)
+        bin_mean = [_masked_mean(c, m) for c, m in zip(chunks, mask_chunks)]
+        bin_std = [_masked_std(c, m) for c, m in zip(chunks, mask_chunks)]
+        features = [
+            _masked_mean(x, mask),
+            _masked_std(x, mask),
+            _masked_max(x, mask),
+            _masked_first(x, mask),
+            _masked_last(x, mask),
+            _masked_last(x, mask) - _masked_first(x, mask),
+            *bin_mean,
+            *bin_std,
+        ]
+        if self.use_velocity:
+            delta_mask = mask[:, 1:] & mask[:, :-1]
+            delta = x[:, 1:] - x[:, :-1]
+            absd = delta.abs()
+            delta_mean = _masked_mean(absd, delta_mask)
+            delta_std = _masked_std(absd, delta_mask)
+            features.append(delta_mean)
+            features.append(delta_std)
+            features.append(_masked_max(absd, delta_mask))
+            thr = delta_mean.unsqueeze(1) + delta_std.unsqueeze(1)
+            features.append(_masked_mean((absd > thr).float(), delta_mask))
+        if self.fft_bands > 0:
+            if self.fft_mode == "global":
+                mean = _masked_mean(x, mask).unsqueeze(1)
+                x_c = (x - mean) * mask.to(dtype=x.dtype).unsqueeze(-1)
+                spec = torch.fft.rfft(x_c, dim=1, norm="ortho")
+                mag = spec.abs()[:, 1:, :]
+                n_freq = mag.shape[1]
+                band_size = max(1, n_freq // self.fft_bands)
+                for k in range(self.fft_bands):
+                    lo, hi = k * band_size, ((k + 1) * band_size if k < self.fft_bands - 1 else n_freq)
+                    features.append(torch.log1p(mag[:, lo:hi, :].mean(dim=1)))
+            else:
+                B, T_total, D = x.shape
+                seg_len = self.segment_length
+                n_seg = T_total // seg_len
+                seg = x[:, : n_seg * seg_len].reshape(B, n_seg, seg_len, D)
+                seg_mask = mask[:, : n_seg * seg_len].reshape(B, n_seg, seg_len)
+                valid_seg = seg_mask.any(dim=2)
+                seg_mean = _masked_mean(seg.reshape(B * n_seg, seg_len, D), seg_mask.reshape(B * n_seg, seg_len))
+                seg_c = seg - seg_mean.reshape(B, n_seg, 1, D)
+                seg_c = seg_c * seg_mask.to(dtype=x.dtype).unsqueeze(-1)
+                spec = torch.fft.rfft(seg_c, dim=2, norm="ortho")
+                mag = spec.abs()[:, :, 1:, :]
+                n_freq = mag.shape[2]
+                band_size = max(1, n_freq // self.fft_bands)
+                for k in range(self.fft_bands):
+                    lo, hi = k * band_size, ((k + 1) * band_size if k < self.fft_bands - 1 else n_freq)
+                    band = mag[:, :, lo:hi, :].mean(dim=2)
+                    features.append(torch.log1p(_masked_mean(band, valid_seg)))
+                    features.append(torch.log1p(_masked_std(band, valid_seg)))
+        return self.net(torch.cat(features, dim=1))
+
+
+def _masked_mean(x, mask):
+    weights = mask.to(dtype=x.dtype).unsqueeze(-1)
+    denom = weights.sum(dim=1).clamp_min(1.0)
+    return (x * weights).sum(dim=1) / denom
+
+
+def _masked_std(x, mask):
+    weights = mask.to(dtype=x.dtype).unsqueeze(-1)
+    denom = weights.sum(dim=1).clamp_min(1.0)
+    mean = (x * weights).sum(dim=1, keepdim=True) / denom.unsqueeze(1)
+    var = ((x - mean) ** 2 * weights).sum(dim=1) / denom
+    return var.clamp_min(0.0).sqrt()
+
+
+def _masked_max(x, mask):
+    if x.shape[1] == 0:
+        return x.new_zeros((x.shape[0], x.shape[-1]))
+    neg = torch.finfo(x.dtype).min
+    masked = x.masked_fill(~mask.unsqueeze(-1), neg)
+    values = masked.max(dim=1).values
+    return torch.where(mask.any(dim=1, keepdim=True), values, torch.zeros_like(values))
+
+
+def _masked_first(x, mask):
+    idx = mask.float().argmax(dim=1)
+    values = x[torch.arange(x.shape[0], device=x.device), idx]
+    return torch.where(mask.any(dim=1, keepdim=True), values, torch.zeros_like(values))
+
+
+def _masked_last(x, mask):
+    rev_idx = mask.flip(dims=[1]).float().argmax(dim=1)
+    idx = x.shape[1] - 1 - rev_idx
+    values = x[torch.arange(x.shape[0], device=x.device), idx]
+    return torch.where(mask.any(dim=1, keepdim=True), values, torch.zeros_like(values))
 
 
 # -----------------------------------------------------------------------------
@@ -325,12 +455,13 @@ def ce_class_weights(y, mode):
 # Mixup
 # -----------------------------------------------------------------------------
 
-def mixup_batch(x, y, alpha=0.2):
+def mixup_batch(x, y, alpha=0.2, mask=None):
     if alpha <= 0:
-        return x, y, y, 1.0
+        return x, y, y, 1.0, mask
     lam = float(np.random.beta(alpha, alpha))
     perm = torch.randperm(x.shape[0], device=x.device)
-    return lam * x + (1.0 - lam) * x[perm], y, y[perm], lam
+    mixed_mask = None if mask is None else (mask | mask[perm])
+    return lam * x + (1.0 - lam) * x[perm], y, y[perm], lam, mixed_mask
 
 
 def single_loss(logits, y, cfg, ce_weights, corn_pos_weight):
@@ -355,25 +486,67 @@ def mix_loss(logits, y_a, y_b, lam, cfg, ce_weights, corn_pos_weight):
 
 def load_npz(path):
     d = np.load(path)
-    return d["x"].astype(np.float32), d["y"].astype(np.int64)
+    x = d["x"].astype(np.float32)
+    y = d["y"].astype(np.int64)
+    if "mask" in d.files:
+        mask = d["mask"].astype(bool)
+    else:
+        mask = np.ones(x.shape[:2], dtype=bool)
+    return x, y, mask
 
 
-def normalize_from_train(x_train, x_val):
-    mean = x_train.mean(axis=(0, 1), keepdims=True)
-    std = np.maximum(x_train.std(axis=(0, 1), keepdims=True), 1e-4)
-    return (x_train - mean) / std, (x_val - mean) / std
+def normalize_from_train(x_train, x_val, mask_train, mask_val, sample_balanced=False):
+    train_valid = mask_train[..., None].astype(np.float32)
+    if sample_balanced:
+        counts = mask_train.sum(axis=1).clip(1).astype(np.float32)[:, None]
+        sample_mean = (x_train * train_valid).sum(axis=1) / counts
+        mean = sample_mean.mean(axis=0, keepdims=True)
+        sample_var = ((x_train - mean[:, None, :]) ** 2 * train_valid).sum(axis=1) / counts
+        var = sample_var.mean(axis=0, keepdims=True)
+        mean = mean[:, None, :]
+        var = var[:, None, :]
+    else:
+        count = max(float(train_valid.sum()), 1.0)
+        mean = (x_train * train_valid).sum(axis=(0, 1), keepdims=True) / count
+        var = ((x_train - mean) ** 2 * train_valid).sum(axis=(0, 1), keepdims=True) / count
+    std = np.maximum(np.sqrt(var), 1e-4)
+    x_train = (x_train - mean) / std
+    x_val = (x_val - mean) / std
+    x_train = np.where(mask_train[..., None], x_train, 0.0)
+    x_val = np.where(mask_val[..., None], x_val, 0.0)
+    return x_train.astype(np.float32), x_val.astype(np.float32)
 
 
-def temporal_pca_from_train(x_train, x_val, pca_dim):
+def temporal_pca_from_train(x_train, x_val, mask_train, mask_val, pca_dim, tokens_per_sample=0):
     if pca_dim >= x_train.shape[-1] or pca_dim <= 0:
         return x_train, x_val
     n_train, t, d = x_train.shape
     n_val = x_val.shape[0]
     pca = PCA(n_components=pca_dim, svd_solver="randomized", random_state=0, whiten=False)
-    train_red = pca.fit_transform(x_train.reshape(-1, d)).astype(np.float32)
-    val_red = pca.transform(x_val.reshape(-1, d)).astype(np.float32)
-    print(f"PCA {d}->{pca_dim}, explained_variance={pca.explained_variance_ratio_.sum():.5f}", flush=True)
-    return train_red.reshape(n_train, t, pca_dim), val_red.reshape(n_val, t, pca_dim)
+    if tokens_per_sample > 0:
+        fit_rows = []
+        for sample, sample_mask in zip(x_train, mask_train):
+            valid_idx = np.flatnonzero(sample_mask)
+            if valid_idx.size > tokens_per_sample:
+                pick = np.linspace(0, valid_idx.size - 1, num=tokens_per_sample).round().astype(np.int64)
+                valid_idx = valid_idx[pick]
+            fit_rows.append(sample[valid_idx])
+        pca_fit = np.concatenate(fit_rows, axis=0).reshape(-1, d)
+    else:
+        pca_fit = x_train[mask_train].reshape(-1, d)
+    pca.fit(pca_fit)
+    train_red_valid = pca.transform(x_train[mask_train].reshape(-1, d)).astype(np.float32)
+    val_red_valid = pca.transform(x_val[mask_val].reshape(-1, d)).astype(np.float32)
+    train_red = np.zeros((n_train, t, pca_dim), dtype=np.float32)
+    val_red = np.zeros((n_val, x_val.shape[1], pca_dim), dtype=np.float32)
+    train_red[mask_train] = train_red_valid
+    val_red[mask_val] = val_red_valid
+    print(
+        f"PCA {d}->{pca_dim}, explained_variance={pca.explained_variance_ratio_.sum():.5f}, "
+        f"fit_rows={pca_fit.shape[0]}",
+        flush=True,
+    )
+    return train_red, val_red
 
 
 # -----------------------------------------------------------------------------
@@ -384,9 +557,13 @@ def set_seed(seed):
     random.seed(seed); np.random.seed(seed); torch.manual_seed(seed); torch.cuda.manual_seed_all(seed)
 
 
-def train_one_config(cfg, x_train, y_train, x_val, y_val, epochs, batch_size, device, patience):
+def train_one_config(cfg, x_train, y_train, mask_train, x_val, y_val, mask_val, epochs, batch_size, device, patience):
     set_seed(cfg.seed)
-    train_ds = TensorDataset(torch.from_numpy(x_train), torch.from_numpy(y_train))
+    use_mask = not (bool(mask_train.all()) and bool(mask_val.all()))
+    if use_mask:
+        train_ds = TensorDataset(torch.from_numpy(x_train), torch.from_numpy(y_train), torch.from_numpy(mask_train))
+    else:
+        train_ds = TensorDataset(torch.from_numpy(x_train), torch.from_numpy(y_train))
     generator = torch.Generator(); generator.manual_seed(cfg.seed)
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, generator=generator)
 
@@ -422,22 +599,29 @@ def train_one_config(cfg, x_train, y_train, x_val, y_val, epochs, batch_size, de
     )
 
     x_val_t = torch.from_numpy(x_val).to(device)
+    mask_val_t = torch.from_numpy(mask_val).to(device) if use_mask else None
     best: dict[str, Any] | None = None
     epochs_without_improvement = 0
     epoch = 0
     for epoch in range(1, epochs + 1):
         model.train()
-        for xb, yb in train_loader:
+        for batch in train_loader:
+            if use_mask:
+                xb, yb, mb = batch
+                mb = mb.to(device)
+            else:
+                xb, yb = batch
+                mb = None
             for g in optimizer.param_groups:
                 g["lr"] = cfg.lr * lr_at(global_step)
             xb, yb = xb.to(device), yb.to(device)
             optimizer.zero_grad(set_to_none=True)
             if cfg.mixup_alpha > 0:
-                xb, ya, yb_p, lam = mixup_batch(xb, yb, alpha=cfg.mixup_alpha)
-                logits = model(xb)
+                xb, ya, yb_p, lam, mb_mix = mixup_batch(xb, yb, alpha=cfg.mixup_alpha, mask=mb)
+                logits = model(xb, mb_mix) if use_mask else model(xb)
                 loss = mix_loss(logits, ya, yb_p, lam, cfg, weights, corn_pos_weight)
             else:
-                logits = model(xb)
+                logits = model(xb, mb) if use_mask else model(xb)
                 loss = single_loss(logits, yb, cfg, weights, corn_pos_weight)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
@@ -446,7 +630,7 @@ def train_one_config(cfg, x_train, y_train, x_val, y_val, epochs, batch_size, de
 
         model.eval()
         with torch.inference_mode():
-            logits = model(x_val_t)
+            logits = model(x_val_t, mask_val_t) if use_mask else model(x_val_t)
             if cfg.loss == "corn":
                 probs, _ = corn_probs_scores(logits)
                 probs_np = probs.cpu().numpy().astype(np.float32)
@@ -519,6 +703,8 @@ def maybe_init_wandb(args, train_shape, val_shape, num_configs):
                 "epochs": args.epochs, "batch_size": args.batch_size,
                 "num_configs": num_configs, "grid": args.grid,
                 "rank_by": args.rank_by, "pca_dim": args.pca_dim,
+                "sample_balanced_normalization": args.sample_balanced_normalization,
+                "pca_tokens_per_sample": args.pca_tokens_per_sample,
             },
         )
     except Exception as exc:
@@ -534,12 +720,18 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
     device = torch.device(args.device if torch.cuda.is_available() else "cpu")
 
-    x_train, y_train = load_npz(args.train_npz)
-    x_val, y_val = load_npz(args.val_npz)
+    x_train, y_train, mask_train = load_npz(args.train_npz)
+    x_val, y_val, mask_val = load_npz(args.val_npz)
     raw_train_shape, raw_val_shape = x_train.shape, x_val.shape
-    x_train, x_val = normalize_from_train(x_train, x_val)
+    x_train, x_val = normalize_from_train(
+        x_train, x_val, mask_train, mask_val,
+        sample_balanced=args.sample_balanced_normalization,
+    )
     if args.pca_dim > 0:
-        x_train, x_val = temporal_pca_from_train(x_train, x_val, args.pca_dim)
+        x_train, x_val = temporal_pca_from_train(
+            x_train, x_val, mask_train, mask_val, args.pca_dim,
+            tokens_per_sample=args.pca_tokens_per_sample,
+        )
 
     all_configs = build_grid(args.grid)
     if args.segment_length > 0:
@@ -559,8 +751,8 @@ def main():
         print(f"config {idx}/{len(all_configs)} {cfg}", flush=True)
         result = train_one_config(
             cfg=cfg,
-            x_train=x_train, y_train=y_train,
-            x_val=x_val, y_val=y_val,
+            x_train=x_train, y_train=y_train, mask_train=mask_train,
+            x_val=x_val, y_val=y_val, mask_val=mask_val,
             epochs=args.epochs, batch_size=args.batch_size,
             device=device, patience=args.patience,
         )
@@ -599,7 +791,19 @@ def main():
         "val_shape": list(x_val.shape),
         "raw_train_shape": list(raw_train_shape),
         "raw_val_shape": list(raw_val_shape),
+        "train_valid_tokens_min_median_max": [
+            int(mask_train.sum(axis=1).min()),
+            float(np.median(mask_train.sum(axis=1))),
+            int(mask_train.sum(axis=1).max()),
+        ],
+        "val_valid_tokens_min_median_max": [
+            int(mask_val.sum(axis=1).min()),
+            float(np.median(mask_val.sum(axis=1))),
+            int(mask_val.sum(axis=1).max()),
+        ],
         "pca_dim": args.pca_dim,
+        "sample_balanced_normalization": bool(args.sample_balanced_normalization),
+        "pca_tokens_per_sample": int(args.pca_tokens_per_sample),
         "grid": args.grid,
         "rank_by": args.rank_by,
         "best": overall[0],

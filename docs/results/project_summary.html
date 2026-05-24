@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>V-JEPA 2.1 × PD hand-task severity — project summary</title>
+<style>
+body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;max-width:960px;margin:2em auto;padding:0 1.2em;color:#222;line-height:1.55}
+h1{border-bottom:2px solid #333;padding-bottom:.3em}
+h2{margin-top:1.8em;color:#333;border-bottom:1px solid #ddd;padding-bottom:.2em}
+h3{margin-top:1.2em;color:#444}
+table{border-collapse:collapse;margin:1em 0;font-size:.93em;width:100%}
+th,td{border:1px solid #aaa;padding:.4em .7em;text-align:right}
+th{background:#eee;text-align:center}
+td.label{text-align:left;font-family:monospace}
+td.txt{text-align:left}
+.verdict{background:#fadbd8;border-left:4px solid #c0392b;padding:.7em 1em;margin:1em 0;font-weight:600}
+.callout{background:#fef9e7;border-left:4px solid #d4ac0d;padding:.7em 1em;margin:1em 0}
+.note{background:#eaf2f8;border-left:4px solid #2874a6;padding:.7em 1em;margin:1em 0}
+.win{color:#1e8449;font-weight:600}
+.loss{color:#c0392b;font-weight:600}
+.neutral{color:#7f8c8d}
+.done{color:#1e8449}
+.skip{color:#7f8c8d;text-decoration:line-through}
+code{background:#eee;padding:.1em .3em;border-radius:3px;font-size:.92em}
+.tl{border-left:3px solid #888;padding-left:1em;margin:1em 0}
+.tl-item{margin-bottom:1em}
+.tl-item .when{color:#888;font-size:.85em;font-family:monospace}
+.tl-item .what{font-weight:600;margin-top:.1em}
+ul.compact{margin:.3em 0;padding-left:1.4em}
+ul.compact li{margin:.15em 0}
+.kpi{display:inline-block;background:#f4f4f4;border:1px solid #ccc;padding:.4em .8em;margin:.2em;border-radius:4px}
+.kpi .v{font-size:1.3em;font-weight:600;color:#333}
+.kpi .k{font-size:.8em;color:#666;display:block}
+</style></head>
+<body>
+
+<h1>V-JEPA 2.1 → MDS-UPDRS hand-task severity — project summary</h1>
+<p style="color:#666"><b>Yunyang Li</b> · Scherzer lab, Yale · <b>2026-05-24</b> · item 3.4 finger tapping, may19 dataset.</p>
+
+<div class="verdict">
+<b>Bottom line:</b> Under a strictly leak-free protocol, V-JEPA 2.1 features add <b>no measurable signal</b> over a kinematic + demographic baseline for predicting MDS-UPDRS item 3.4 severity.
+Δ QWK = <b>−0.004</b> (Wilcoxon p = 0.71, one-sided) across 5 subject-disjoint folds × 10 seeds.
+The previously reported +0.030 fold-0 lift was a val-tuning artifact.
+</div>
+
+<div>
+  <span class="kpi"><span class="v">5</span><span class="k">folds (subject-disjoint)</span></span>
+  <span class="kpi"><span class="v">10</span><span class="k">seeds / fold</span></span>
+  <span class="kpi"><span class="v">0.536</span><span class="k">kin+dx mean QWK</span></span>
+  <span class="kpi"><span class="v">0.532</span><span class="k">+ V-JEPA-OOF mean QWK</span></span>
+  <span class="kpi"><span class="v">−0.004</span><span class="k">Δ QWK (null)</span></span>
+  <span class="kpi"><span class="v">p = 0.71</span><span class="k">Wilcoxon (one-sided)</span></span>
+</div>
+
+<h2>1. Problem & scope</h2>
+<p>One model per item, ordinal MDS-UPDRS score (0–4) for a single hand-task clip. v0 spec lives in <code>foundation_model_minimal_hand_tasks.md</code>; the guiding principle was <b>minimal divergence from Meta's V-JEPA 2.1 reference</b> — change only the dataset class, the head (CORN ordinal over 5 levels), and the loss. Backbone, attentive probe, optimizer, multi-clip aggregation: stay at Meta's defaults.</p>
+<p>This summary covers <b>item 3.4 finger tapping</b> end-to-end. Item 3.5 (hand movements) has not yet been run through the leak-free protocol.</p>
+
+<h2>2. What we built (timeline)</h2>
+<div class="tl">
+  <div class="tl-item"><div class="when">phase 1</div><div class="what">Pipeline scaffolding</div>
+    May19 finger-tap manifest, subject-level 5-fold splits, kinematic LightGBM baseline (v5 features), fixed-K LoRA CORN attentive probe on fold 0.</div>
+  <div class="tl-item"><div class="when">phase 2</div><div class="what">Better V-JEPA temporal features</div>
+    Cached temporal-stats stacker; spatial-pool/temporal-keep extractor; learned cross-window combiner (replaces logit-mean); multi-scale tubelet features (coarse/fine).</div>
+  <div class="tl-item"><div class="when">phase 3</div><div class="what">Iterate until V-JEPA ≈ kinematic</div>
+    Aggressive adaptive K<sub>i</sub> sweeps, bigger epoch budget, LoRA depth/rank sweeps, multi-scale combiners, MIL variants, warmstart. Plateaued well below kinematic.</div>
+  <div class="tl-item"><div class="when">phase 4</div><div class="what">R² scan</div>
+    Asked the prior question directly: <i>can any V-JEPA cache/reducer/model linearly predict the kinematic features?</i> Across 54 configs, mean R² = <b>−0.117</b>. The V-JEPA representation does not contain the kinematic signal in any easily-recoverable form.</div>
+  <div class="tl-item"><div class="when">phase 5</div><div class="what">Hybrid (kin + V-JEPA)</div>
+    Stack OOF V-JEPA probs onto the kinematic feature set with ExtraTrees. First pass: +0.030 QWK on fold 0. Looked publishable.</div>
+  <div class="tl-item"><div class="when">phase 6</div><div class="what">Leakage audit</div>
+    Two leaks identified: (i) backbone <code>best.pt</code> was selected by val QWK; (ii) the inner V-JEPA combiner returned the best-val-QWK epoch. Both implicitly tune on the same val set the stacker is evaluated on.</div>
+  <div class="tl-item"><div class="when">phase 7</div><div class="what">Leak-free 5-fold replication</div>
+    Use <code>latest.pt</code> for LoRA, add <code>--no-val-tuning</code> to the combiner, replicate across all 5 folds × 10 seeds. Pooled across 50 fold×seed pairs: Δ QWK = −0.004, p = 0.71. <b>Null.</b></div>
+</div>
+
+<h2>3. Final numbers — leak-free 5-fold</h2>
+<table>
+<tr><th>fold</th><th>kin+dx (mean ± std)</th><th>+ V-JEPA-OOF</th><th>Δ</th><th>wins (10 seeds)</th></tr>
+<tr><td>0</td><td>0.553 ± 0.018</td><td>0.564 ± 0.024</td><td class="win">+0.011</td><td>6/10</td></tr>
+<tr><td>1</td><td>0.446 ± 0.019</td><td>0.432 ± 0.023</td><td class="loss">−0.014</td><td>3/10</td></tr>
+<tr><td>2</td><td>0.579 ± 0.026</td><td>0.586 ± 0.019</td><td class="win">+0.007</td><td>6/10</td></tr>
+<tr><td>3</td><td>0.598 ± 0.025</td><td>0.589 ± 0.021</td><td class="loss">−0.009</td><td>5/10</td></tr>
+<tr><td>4</td><td>0.504 ± 0.018</td><td>0.489 ± 0.032</td><td class="loss">−0.015</td><td>3/10</td></tr>
+<tr style="background:#f4f4f4;font-weight:bold"><td>mean</td><td>0.536 ± 0.055</td><td>0.532 ± 0.062</td><td class="neutral">−0.004</td><td>23/50</td></tr>
+</table>
+<p>Pooled 50 fold×seed Wilcoxon (one-sided H<sub>1</sub>: hybrid &gt; baseline): <b>p = 0.7106</b>. 3 of 5 folds show negative Δ. Across-fold spread (±0.055) dominates the comparison — same lesson the R² scan told us at the feature level.</p>
+
+<h2>4. What we modified vs Meta's reference</h2>
+<table>
+<tr><th>#</th><th class="txt">Modification</th><th class="txt">Where</th></tr>
+<tr><td>1</td><td class="txt">ClipDataset reads our manifest, applies MediaPipe wrist-anchored ~256² crop, yields (clip, item_label).</td><td class="txt"><code>data/clip_dataset.py</code></td></tr>
+<tr><td>2</td><td class="txt">Output head: CORN ordinal over 5 levels (UPDRS 0–4) replaces K-way classifier.</td><td class="txt"><code>heads/corn_head.py</code></td></tr>
+<tr><td>3</td><td class="txt">Loss: CORN ordinal (Cao 2020) replaces cross-entropy.</td><td class="txt"><code>losses/corn_loss.py</code></td></tr>
+<tr><td>4</td><td class="txt">Early-stop metric: held-out fold QWK (was top-1 acc).</td><td class="txt">eval config</td></tr>
+</table>
+<p>The leak-free protocol additionally uses <code>latest.pt</code> instead of <code>best.pt</code> for the LoRA backbone, and a <code>--no-val-tuning</code> flag in the combiner — both are evaluation-protocol changes, not architecture changes.</p>
+
+<h2>5. Why V-JEPA didn't help here</h2>
+<ul class="compact">
+<li><b>Small N.</b> ~1,200 clips → ~240 per held-out fold. Cross-fold std (±0.055) is &gt;10× the hybrid Δ.</li>
+<li><b>The signal V-JEPA encodes ≠ the signal that matters.</b> R² scan shows V-JEPA features cannot linearly recover kinematic measures (mean R² = −0.117 across 54 configs). The 1–5 Hz finger-tapping rhythm and amplitude decrement that drive UPDRS scoring are not isolated in the V-JEPA latent.</li>
+<li><b>Kinematic features are already strong.</b> Hand-crafted v5 features capture exactly what the rater is grading. Adding V-JEPA probs through ExtraTrees has nothing orthogonal to add.</li>
+<li><b>Earlier "wins" were val-tuning leaks.</b> Once both implicit val-selection paths are closed, the lift vanishes.</li>
+</ul>
+
+<h2>6. Artifacts</h2>
+<ul class="compact">
+<li><b>Verdict report:</b> <code>docs/results/hybrid_5fold_final_verdict.html</code></li>
+<li><b>Leakage audit:</b> <code>docs/results/hybrid_leakage_audit.html</code></li>
+<li><b>R² scan:</b> <code>docs/results/r2_kin_scan.html</code>, <code>r2_scan_findings.html</code></li>
+<li><b>Aggregate JSON (50 fold×seed pairs):</b> <code>docs/results/hybrid_5fold_aggregate.json</code></li>
+<li><b>Per-fold multiseed JSON:</b> <code>hybrid/item_3_4/fold_{k}/oof_stack/multiseed_oof_probs{,_clean}.json</code></li>
+<li><b>Pipeline scripts:</b> <code>scripts/pd_hand/{oof_vjepa_combiner_predictions,augment_with_oof_probs,hybrid_multiseed,aggregate_5fold_hybrid}.py</code></li>
+<li><b>Retracted figure:</b> <code>figure_hybrid_clean_qwk.pdf</code> (fold-0 only, val-tuning-leaked)</li>
+</ul>
+
+<h2>7. Open questions / next directions</h2>
+<div class="callout">
+<b>For the paper:</b> the null result <i>is</i> a result — V-JEPA 2.1 features do not improve a clinical kinematic baseline for finger-tapping severity at this dataset scale, despite a careful adaptation. That claim is publishable on its own if framed as a negative result + leakage methodology contribution.
+</div>
+<ul class="compact">
+<li><b>Item 3.5 (hand movements)</b> — replicate the same leak-free protocol to confirm the null isn't item-specific. Highest-value next experiment; pipeline already exists.</li>
+<li><b>V-JEPA → kinematic distillation</b> — auxiliary loss during LoRA-FT that forces the probe to predict scalar kinematic measures. Possible way to anchor the V-JEPA latent to the relevant axes.</li>
+<li><b>Hand-specific video models</b> — a model pre-trained on egocentric / manipulation video may carry more of the right signal than V-JEPA's general action prior.</li>
+<li><b>Bigger N</b> — the across-fold std swamps any small effect; only more clips fix this.</li>
+</ul>
+
+<div class="note">
+<b>Methodological takeaway:</b> in any stacked / cached features pipeline with subject-level CV, audit two things every time — (i) where backbone checkpoints are selected, (ii) where intermediate predictors return their epoch. Both are subtle val-tuning paths that compound into a fake lift.
+</div>
+
+</body></html>

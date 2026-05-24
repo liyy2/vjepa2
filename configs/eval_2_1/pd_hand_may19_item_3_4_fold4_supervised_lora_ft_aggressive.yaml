@@ -1,0 +1,78 @@
+cpus_per_task: 2
+eval_name: video_classification_frozen
+folder: /gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks_may19/vjepa2_evals/item_3_4/fold_4_supervised_lora_ft_aggressive
+mem_per_gpu: 80G
+nodes: 1
+max_workers: 2
+resume_checkpoint: false
+tag: pd-hand-may19-item-3_4-fold-4-supervised-lora-ft-aggressive
+tasks_per_node: 4
+experiment:
+  classifier:
+    num_heads: 16
+    num_probe_blocks: 4
+    head_type: softmax
+    selection_metric: quadratic_weighted_kappa
+    class_weight: null
+    label_smoothing: 0.1
+  data:
+    dataset_type: ClipDataset
+    dataset_train: /gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks_may19/splits/item_3_4/fold_4_train.csv
+    dataset_val: /gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/foundation_model_minimal_hand_tasks_may19/splits/item_3_4/fold_4_val.csv
+    frame_step: 1
+    frames_per_clip: 32
+    num_classes: 5
+    num_segments: 8
+    num_views_per_segment: 1
+    resolution: 384
+    dataset_kwargs:
+      hand_crop: true
+      crop_size: 256
+      crop_scale: 2.35
+  optimization:
+    batch_size: 1
+    multihead_kwargs:
+    - lr: 0.0003
+      start_lr: 0.0003
+      final_lr: 0.0
+      weight_decay: 0.05
+      final_weight_decay: 0.05
+      warmup: 0.0
+    num_epochs: 30
+    use_bfloat16: true
+    use_pos_embed: false
+    finetune_encoder: true
+    encoder_trainable_patterns:
+    - lora_A
+    - lora_B
+    encoder_lr: 0.00005
+    encoder_weight_decay: 0.01
+model_kwargs:
+  checkpoint: /gpfs/milgram/pi/scherzer/yl2428/vjepa2/checkpoints/vjepa2_1_vitl_dist_vitG_384.pt
+  module_name: evals.video_classification_frozen.modelcustom.vit_encoder_multiclip_vjepa21
+  pretrain_kwargs:
+    encoder:
+      checkpoint_key: ema_encoder
+      model_name: vit_large
+      patch_size: 16
+      tubelet_size: 2
+      uniform_power: false
+      use_rope: true
+      img_temporal_dim_size: 1
+      interpolate_rope: true
+      modality_embedding: true
+      n_output_distillation: 1
+      strict_state_dict: true
+      lora:
+        enabled: true
+        target_modules:
+        - attn.qkv
+        - attn.proj
+        rank: 16
+        alpha: 32
+        dropout: 0.1
+      use_activation_checkpointing: true
+  wrapper_kwargs:
+    max_frames: 4096
+    use_pos_embed: true
+num_workers: 4
