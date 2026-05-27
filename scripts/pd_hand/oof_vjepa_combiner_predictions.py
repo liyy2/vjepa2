@@ -1,13 +1,13 @@
 #!/usr/bin/env python
-"""Subject-OOF V-JEPA combiner predictions on fold-0 train.
+"""Subject-disjoint OOF V-JEPA combiner predictions.
 
-Splits fold-0 train by subject into 5 inner folds; trains a single combiner per inner
-fold on inner-train; predicts inner-val. Stitches the 5 inner-val predictions into
-length-404 OOF train predictions, aligned to the cache row order.
+Splits an outer-fold train set by subject into inner folds, trains one temporal
+CORN combiner per inner fold, and stitches inner-validation predictions into
+train-set OOF probabilities aligned to the V-JEPA cache row order.
 
-Also produces val predictions using a combiner trained on ALL fold-0 train (no inner
-holdout). These are the same model class as the multi-scale adaptive best; here we
-keep things simple by using a single config that worked well in earlier sweeps.
+Also produces outer-validation predictions using a combiner trained on the full
+outer-fold train set.  Use --no-val-tuning for the May 24 clean protocol: it
+returns final-epoch probabilities instead of best-by-validation-QWK snapshots.
 
 Output: NPZ with {train_probs_cache_order[N=404, 5], val_probs_cache_order[N=107, 5],
                   train_cache_sample_indices, val_cache_sample_indices}.
@@ -18,16 +18,17 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-import sys
 from pathlib import Path
 
 import numpy as np
 import torch
 from sklearn.model_selection import StratifiedGroupKFold
 
-sys.path.insert(0, "/gpfs/milgram/pi/scherzer/yl2428/vjepa2/scripts/pd_hand")
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from train_corn_combiner import (  # type: ignore
-    NUM_CLASSES, TemporalCornCombiner, ScaleCache, corn_loss, corn_predict,
+    NUM_CLASSES, TemporalCornCombiner, corn_loss, corn_predict,
     corn_pos_weight_from_labels, cosine_warmup,
 )
 
@@ -53,12 +54,15 @@ def parse_args():
     return p.parse_args()
 
 
-def load_cache(p):
+def load_cache(path: str | Path):
+    p = Path(path)
     d = np.load(p, allow_pickle=False)
     x = d["x"].astype(np.float32)
     y = d["y"].astype(np.int64)
     mask = d["mask"].astype(bool) if "mask" in d.files else np.ones(x.shape[:2], dtype=bool)
     cov = [json.loads(str(s)) for s in d["coverage"]] if "coverage" in d.files else None
+    if cov is None:
+        raise ValueError(f"{p} is missing coverage rows; cannot map cache rows to subject IDs")
     return x, y, mask, cov
 
 
@@ -72,16 +76,24 @@ def cache_to_subject_ids(coverage, fold_csv_path):
             out.append(fold_rows[si].get("subject_id", "UNK"))
         else:
             out.append("UNK")
-    return out
+    if any(subject == "UNK" for subject in out):
+        raise ValueError(f"Could not map all cache rows to subject IDs via {fold_csv_path}")
+    return np.asarray(out, dtype=object)
+
+
+def cache_sample_indices(coverage) -> np.ndarray:
+    return np.asarray([int(round(float(c.get("sample_index", -1)))) for c in coverage], dtype=np.int64)
 
 
 def train_combiner_and_predict(
     x_tr, mask_tr, y_tr, x_va, mask_va, y_va, args, scales_meta,
     pos_weight=None, device="cuda:0", select_on_val=True,
 ):
-    """If select_on_val=False: train fixed args.epochs, return the FINAL epoch's probs
-    (no val-based early stopping / best-epoch selection). Use this for the final
-    full-train combiner that predicts on outer val, to avoid val-tuning leak."""
+    """Train a combiner and return probabilities on x_va.
+
+    With select_on_val=False, this returns final-epoch probabilities and never
+    selects the best validation epoch.  That is the clean May 24 setting.
+    """
     # Build a ScaleCache-like wrapper (only used for input_dim and pos info)
     class _Scale:
         def __init__(self, x, num_segments_for_pos, tubelets_per_segment):
@@ -156,8 +168,19 @@ def train_combiner_and_predict(
                 if epochs_since >= args.patience:
                     break
     if select_on_val:
+        if best_state is None:
+            raise RuntimeError("No best validation state was recorded")
         return best_state
     return last_state
+
+
+def assert_subject_disjoint(subjects: np.ndarray, train_idx: np.ndarray, val_idx: np.ndarray, label: str) -> None:
+    train_subjects = set(subjects[train_idx])
+    val_subjects = set(subjects[val_idx])
+    overlap = train_subjects.intersection(val_subjects)
+    if overlap:
+        sample = sorted(str(x) for x in overlap)[:8]
+        raise ValueError(f"{label}: subject overlap between train and val: {sample}")
 
 
 def main():
@@ -175,6 +198,7 @@ def main():
     sgk = StratifiedGroupKFold(n_splits=args.num_inner_folds, shuffle=True, random_state=args.seed)
     train_probs = np.zeros((len(y_tr), NUM_CLASSES), dtype=np.float32)
     for k_fold, (inner_tr_idx, inner_va_idx) in enumerate(sgk.split(x_tr, y_tr, groups=subj_tr)):
+        assert_subject_disjoint(subj_tr, inner_tr_idx, inner_va_idx, f"inner fold {k_fold + 1}")
         print(f"\n=== inner fold {k_fold+1}/{args.num_inner_folds}: "
               f"inner_tr={len(inner_tr_idx)}, inner_va={len(inner_va_idx)} ===")
         pos_w = corn_pos_weight_from_labels(y_tr[inner_tr_idx]).to(device)
@@ -200,8 +224,8 @@ def main():
     which = "final-epoch" if args.no_val_tuning else "best-epoch"
     print(f"  full-train fold-0 val ({which}) QWK: {val_result['qwk']:.4f}  ep={val_result['epoch']}")
 
-    train_csv_idx = np.array([int(round(float(c.get("sample_index", -1)))) for c in cov_tr], dtype=np.int64)
-    val_csv_idx = np.array([int(round(float(c.get("sample_index", -1)))) for c in cov_va], dtype=np.int64)
+    train_csv_idx = cache_sample_indices(cov_tr)
+    val_csv_idx = cache_sample_indices(cov_va)
     np.savez_compressed(
         args.out_npz,
         train_probs_cache_order=train_probs.astype(np.float32),
@@ -210,6 +234,7 @@ def main():
         val_cache_sample_indices=val_csv_idx,
         train_y=y_tr.astype(np.int64),
         val_y=y_va.astype(np.int64),
+        config=json.dumps(vars(args), sort_keys=True),
     )
     print(f"\nwrote {args.out_npz}")
 

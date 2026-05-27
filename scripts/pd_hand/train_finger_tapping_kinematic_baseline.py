@@ -2,9 +2,8 @@
 """Train a classical finger-tapping baseline from MediaPipe hand kinematics.
 
 This is intended as a fast sanity check against frozen V-JEPA probes for the PD
-hand-task folds.  It extracts per-clip thumb/index opening features, joins
-optional same-side item 3.5 labels as context, and evaluates several small
-sklearn classifiers on the held-out fold.
+hand-task folds.  It extracts per-clip thumb/index opening features and
+evaluates several small sklearn classifiers on the held-out fold.
 """
 
 from __future__ import annotations
@@ -54,15 +53,12 @@ class ClipRecord:
     frame_count: float
     duration_s: float
     start_s: float
-    item35_same: int | None = None
-    item35_other: int | None = None
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--train-csv", default=str(DEFAULT_BASE / "splits/item_3_4/fold_0_train.csv"))
     parser.add_argument("--val-csv", default=str(DEFAULT_BASE / "splits/item_3_4/fold_0_val.csv"))
-    parser.add_argument("--manifest-csv", default=str(DEFAULT_BASE / "hand_clip_manifest.csv"))
     parser.add_argument("--out-dir", default=str(DEFAULT_OUT))
     parser.add_argument("--frame-stride", type=int, default=1)
     parser.add_argument("--max-frames", type=int, default=0, help="0 means use the whole clip after stride.")
@@ -76,9 +72,8 @@ def main() -> None:
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    item35_lookup = _item35_lookup(args.manifest_csv)
-    train_records = _read_records(args.train_csv, item35_lookup)
-    val_records = _read_records(args.val_csv, item35_lookup)
+    train_records = _read_records(args.train_csv)
+    val_records = _read_records(args.val_csv)
 
     train_feature_csv = out_dir / f"train_features_stride{args.frame_stride}.csv"
     val_feature_csv = out_dir / f"val_features_stride{args.frame_stride}.csv"
@@ -113,14 +108,11 @@ def main() -> None:
     print(f"wrote {result_path}")
 
 
-def _read_records(csv_path: str, item35_lookup: dict[tuple[str, str, str], int]) -> list[ClipRecord]:
+def _read_records(csv_path: str) -> list[ClipRecord]:
     records: list[ClipRecord] = []
     with open(csv_path, newline="") as handle:
         for idx, row in enumerate(csv.DictReader(handle)):
             side = row.get("side", "")
-            other_side = "Left" if side == "Right" else "Right"
-            key = (row["subject_id"], row["visit_id"], side)
-            other_key = (row["subject_id"], row["visit_id"], other_side)
             records.append(
                 ClipRecord(
                     row_id=f"{Path(csv_path).stem}:{idx}",
@@ -133,21 +125,9 @@ def _read_records(csv_path: str, item35_lookup: dict[tuple[str, str, str], int])
                     frame_count=_float(row.get("frame_count")),
                     duration_s=_float(row.get("duration_s")),
                     start_s=_float(row.get("start_s")),
-                    item35_same=item35_lookup.get(key),
-                    item35_other=item35_lookup.get(other_key),
                 )
             )
     return records
-
-
-def _item35_lookup(manifest_csv: str) -> dict[tuple[str, str, str], int]:
-    lookup: dict[tuple[str, str, str], int] = {}
-    with open(manifest_csv, newline="") as handle:
-        for row in csv.DictReader(handle):
-            if row.get("task_group") != "hand_movements" or not row.get("label"):
-                continue
-            lookup[(row["subject_id"], row["visit_id"], row["side"])] = int(float(row["label"]))
-    return lookup
 
 
 def _features_for_records(
@@ -492,15 +472,10 @@ def _base_feature_row(record: ClipRecord) -> dict[str, Any]:
         "frame_count_manifest": record.frame_count,
         "duration_s_manifest": record.duration_s,
         "start_s_manifest": record.start_s,
-        "item35_same": -1 if record.item35_same is None else record.item35_same,
-        "item35_other": -1 if record.item35_other is None else record.item35_other,
     }
     row["side_right"] = 1.0 if record.side == "Right" else 0.0
     for dx in ("HC", "NDC", "PD", "PPD"):
         row[f"dx_{dx}"] = 1.0 if record.dx == dx else 0.0
-    for score in range(5):
-        row[f"item35_same_{score}"] = 1.0 if record.item35_same == score else 0.0
-        row[f"item35_other_{score}"] = 1.0 if record.item35_other == score else 0.0
     return row
 
 
@@ -518,13 +493,12 @@ def _fit_and_eval(train_rows: list[dict[str, Any]], val_rows: list[dict[str, Any
             k
             for k in all_feature_names
             if k.startswith("dx_")
-            or k.startswith("item35")
             or k in {"side_right", "duration_s_manifest", "start_s_manifest"}
         ],
         "old_openmeta": [
             k
             for k in old_feature_names
-            if k.startswith(("open_", "open_px_", "dx_", "item35"))
+            if k.startswith(("open_", "open_px_", "dx_"))
             or k in {"side_right", "duration_s_manifest"}
         ],
     }
@@ -690,15 +664,10 @@ def _old_feature_names(feature_names: list[str]) -> list[str]:
         "frames_seen",
         "frames_with_hand",
         "hand_detect_rate",
-        "item35_other",
-        "item35_same",
         "side_right",
         "start_s_manifest",
     }
     keep.update(f"dx_{dx}" for dx in ("HC", "NDC", "PD", "PPD"))
-    for score in range(5):
-        keep.add(f"item35_same_{score}")
-        keep.add(f"item35_other_{score}")
     for prefix in series:
         keep.update(f"{prefix}_{metric}" for metric in old_metrics)
     return sorted(k for k in feature_names if k in keep)

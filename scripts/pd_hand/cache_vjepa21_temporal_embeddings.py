@@ -1,8 +1,16 @@
 #!/usr/bin/env python
-"""Cache pure-vision V-JEPA 2.1 temporal embeddings for PD hand clips.
+"""Cache V-JEPA 2.1 temporal embeddings for PD hand-task clips.
 
-The cached tensor is a per-sample sequence of spatially pooled V-JEPA tubelet
-features. 
+This is intentionally a thin adapter around Meta's frozen video encoder and the
+local ClipDataset.  It writes one NPZ per split with:
+
+  x        [N, T, D] pooled tubelet embeddings
+  y        [N] integer labels
+  mask     [N, T] valid tubelet mask
+  coverage JSON rows from ClipDataset, including sample_index
+
+The cache can be run on a fixed segment grid or on adaptive sliding windows
+(`--adaptive-num-clips`) for full-video coverage.
 """
 
 from __future__ import annotations
@@ -26,52 +34,82 @@ from src.datasets.clip_dataset import make_clipdataset
 
 DEFAULT_CONFIG = (
     "/gpfs/milgram/pi/scherzer/yl2428/vjepa2/configs/eval_2_1/"
-    "pd_hand_item_3_4_fold0_vjepa2_1_vitl384_corn_accuracy_dense.yaml"
+    "pd_hand_may24_vitl384_lora_cache.yaml"
 )
 DEFAULT_OUT = (
     "/gpfs/milgram/pi/scherzer/yl2428/pd-analysis/outputs/"
-    "foundation_model_minimal_hand_tasks/vjepa2_embeddings/item_3_4/fold_0"
+    "foundation_model_minimal_hand_tasks_may19/vjepa2_embeddings/item_3_4"
 )
 DEFAULT_NORMALIZATION = ((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", default=DEFAULT_CONFIG)
     parser.add_argument("--out-dir", default=DEFAULT_OUT)
     parser.add_argument("--split", choices=("train", "val", "both"), default="both")
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--num-workers", type=int, default=2)
     parser.add_argument("--device", default="cuda:0")
-    parser.add_argument("--hand-crop", action="store_true", help="Use ClipDataset visual hand crop preprocessing.")
-    parser.add_argument("--crop-size", type=int, default=256, help="Min side length of the hand crop in pixels.")
-    parser.add_argument("--crop-scale", type=float, default=2.35, help="Multiplier on hand-landmark radius for crop side length.")
-    parser.add_argument("--pool", choices=("mean", "mean_std", "max", "mean_max", "topk_mean"), default="mean")
-    parser.add_argument("--topk", type=int, default=16, help="K for topk_mean pool (top-K spatial tokens by L2 norm).")
-    parser.add_argument("--adaptive-num-clips", action="store_true",
-                        help="Use K_i=ceil(duration_s) non-overlapping windows and save a token mask.")
+    parser.add_argument("--force", action="store_true")
+
+    parser.add_argument("--dataset-train", default="", help="Override experiment.data.dataset_train")
+    parser.add_argument("--dataset-val", default="", help="Override experiment.data.dataset_val")
+    parser.add_argument("--checkpoint", default="", help="Override model_kwargs.checkpoint")
+    parser.add_argument("--frames-per-clip", type=int, default=0)
+    parser.add_argument("--frame-step", type=int, default=0)
+    parser.add_argument("--num-segments", type=int, default=0)
+    parser.add_argument("--resolution", type=int, default=0)
+
+    parser.add_argument("--hand-crop", action="store_true")
+    parser.add_argument("--crop-size", type=int, default=256)
+    parser.add_argument("--crop-scale", type=float, default=2.35)
+    parser.add_argument(
+        "--pool",
+        choices=("mean", "mean_std", "max", "mean_max", "topk_mean"),
+        default="mean",
+        help="Spatial pooling over V-JEPA patch tokens inside each tubelet.",
+    )
+    parser.add_argument("--topk", type=int, default=16, help="K for topk_mean pooling.")
+
+    parser.add_argument("--adaptive-num-clips", action="store_true")
     parser.add_argument("--adaptive-duration-col", default="duration_s")
     parser.add_argument("--adaptive-min-clips", type=int, default=1)
     parser.add_argument("--adaptive-max-clips", type=int, default=0)
-    parser.add_argument("--force", action="store_true")
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
     cfg = yaml.safe_load(Path(args.config).read_text())
-    out_dir = Path(args.out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
+    data_cfg = dict(cfg["experiment"]["data"])
+    model_cfg = dict(cfg["model_kwargs"])
 
-    exp = cfg["experiment"]
-    data_cfg = dict(exp["data"])
-    model_cfg = cfg["model_kwargs"]
+    if args.dataset_train:
+        data_cfg["dataset_train"] = args.dataset_train
+    if args.dataset_val:
+        data_cfg["dataset_val"] = args.dataset_val
+    if args.checkpoint:
+        model_cfg["checkpoint"] = args.checkpoint
+    for attr, key in (
+        ("frames_per_clip", "frames_per_clip"),
+        ("frame_step", "frame_step"),
+        ("num_segments", "num_segments"),
+        ("resolution", "resolution"),
+    ):
+        value = getattr(args, attr)
+        if value:
+            data_cfg[key] = value
+
     frames_per_clip = int(data_cfg["frames_per_clip"])
     frame_step = int(data_cfg["frame_step"])
     num_segments = int(data_cfg["num_segments"])
     resolution = int(data_cfg["resolution"])
     patch_size = int(model_cfg["pretrain_kwargs"]["encoder"].get("patch_size", 16))
     spatial_tokens = (resolution // patch_size) ** 2
+
+    out_dir = Path(args.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
 
     device = torch.device(args.device if torch.cuda.is_available() else "cpu")
     encoder = init_module(
@@ -85,28 +123,25 @@ def main() -> None:
     )
     encoder.eval()
 
-    splits = []
+    split_paths: list[tuple[str, str]] = []
     if args.split in ("train", "both"):
-        splits.append(("train", data_cfg["dataset_train"]))
+        split_paths.append(("train", data_cfg["dataset_train"]))
     if args.split in ("val", "both"):
-        splits.append(("val", data_cfg["dataset_val"]))
+        split_paths.append(("val", data_cfg["dataset_val"]))
 
-    for split_name, csv_path in splits:
-        crop_tag = ""
-        if args.hand_crop:
-            crop_tag = f"_cs{args.crop_size}_sc{args.crop_scale:g}"
-        segment_tag = str(num_segments) + "seg"
-        if args.adaptive_num_clips:
-            segment_tag = "adaptive"
-            if args.adaptive_max_clips > 0:
-                segment_tag += f"_max{args.adaptive_max_clips}"
-        suffix = (
-            f"vjepa21_vitl384_{split_name}_"
-            f"{frames_per_clip}f_step{frame_step}_"
-            f"{segment_tag}_"
-            f"{'handcrop' if args.hand_crop else 'nocrop'}{crop_tag}_{args.pool}.npz"
+    for split_name, csv_path in split_paths:
+        out_path = out_dir / cache_name(
+            split_name=split_name,
+            frames_per_clip=frames_per_clip,
+            frame_step=frame_step,
+            num_segments=num_segments,
+            adaptive=args.adaptive_num_clips,
+            adaptive_max=args.adaptive_max_clips,
+            hand_crop=args.hand_crop,
+            crop_size=args.crop_size,
+            crop_scale=args.crop_scale,
+            pool=args.pool,
         )
-        out_path = out_dir / suffix
         if out_path.exists() and not args.force:
             print(f"exists {out_path}")
             continue
@@ -131,13 +166,50 @@ def main() -> None:
             adaptive_min_clips=args.adaptive_min_clips,
             adaptive_max_clips=args.adaptive_max_clips or None,
             device=device,
-            config={"config": args.config, "split": split_name, "data": data_cfg, "pool": args.pool,
-                    "crop_size": args.crop_size, "crop_scale": args.crop_scale, "topk": args.topk,
-                    "adaptive_num_clips": args.adaptive_num_clips,
-                    "adaptive_duration_col": args.adaptive_duration_col,
-                    "adaptive_min_clips": args.adaptive_min_clips,
-                    "adaptive_max_clips": args.adaptive_max_clips or None},
+            config={
+                "config": args.config,
+                "split": split_name,
+                "data": data_cfg,
+                "checkpoint": model_cfg["checkpoint"],
+                "pool": args.pool,
+                "topk": args.topk,
+                "hand_crop": args.hand_crop,
+                "crop_size": args.crop_size,
+                "crop_scale": args.crop_scale,
+                "adaptive_num_clips": args.adaptive_num_clips,
+                "adaptive_duration_col": args.adaptive_duration_col,
+                "adaptive_min_clips": args.adaptive_min_clips,
+                "adaptive_max_clips": args.adaptive_max_clips or None,
+            },
         )
+
+
+def cache_name(
+    split_name: str,
+    frames_per_clip: int,
+    frame_step: int,
+    num_segments: int,
+    adaptive: bool,
+    adaptive_max: int,
+    hand_crop: bool,
+    crop_size: int,
+    crop_scale: float,
+    pool: str,
+) -> str:
+    if adaptive:
+        segment_tag = "adaptive"
+        if adaptive_max > 0:
+            segment_tag += f"_max{adaptive_max}"
+    else:
+        segment_tag = f"{num_segments}seg"
+    crop_tag = ""
+    if hand_crop:
+        crop_tag = f"_cs{crop_size}_sc{crop_scale:g}"
+    view_tag = "handcrop" if hand_crop else "nocrop"
+    return (
+        f"vjepa21_vitl384_{split_name}_{frames_per_clip}f_step{frame_step}_"
+        f"{segment_tag}_{view_tag}{crop_tag}_{pool}.npz"
+    )
 
 
 def cache_split(
@@ -152,16 +224,16 @@ def cache_split(
     resolution: int,
     spatial_tokens: int,
     hand_crop: bool,
+    crop_size: int,
+    crop_scale: float,
     pool: str,
+    topk: int,
+    adaptive_num_clips: bool,
+    adaptive_duration_col: str,
+    adaptive_min_clips: int,
+    adaptive_max_clips: int | None,
     device: torch.device,
     config: dict[str, Any],
-    crop_size: int = 256,
-    crop_scale: float = 2.35,
-    topk: int = 16,
-    adaptive_num_clips: bool = False,
-    adaptive_duration_col: str = "duration_s",
-    adaptive_min_clips: int = 1,
-    adaptive_max_clips: int | None = None,
 ) -> None:
     transform = make_transforms(
         training=False,
@@ -205,24 +277,33 @@ def cache_split(
             clip_indices = [indices.to(device, non_blocking=True) for indices in data[2]]
             with torch.cuda.amp.autocast(dtype=torch.bfloat16, enabled=device.type == "cuda"):
                 tokens = encoder(clips, clip_indices)[0].float()
+
+            token_mask = token_mask_from_batch(
+                data=data,
+                tokens=tokens,
+                spatial_tokens=spatial_tokens,
+                frames_per_clip=frames_per_clip,
+                tubelet_size=encoder.tubelet_size,
+            )
             seq = spatial_pool(tokens, spatial_tokens=spatial_tokens, pool=pool, topk=topk)
-            token_mask = _token_mask_from_batch(data, seq, frames_per_clip, encoder.tubelet_size)
             if token_mask is not None:
                 seq = seq.masked_fill(~token_mask.unsqueeze(-1), 0.0)
+
             seq_np = seq.cpu().numpy().astype(np.float16)
-            if token_mask is None:
-                mask_np = np.ones(seq_np.shape[:2], dtype=bool)
-            else:
-                mask_np = token_mask.cpu().numpy().astype(bool)
-            for sample_seq, sample_mask in zip(seq_np, mask_np):
-                embeddings.append(sample_seq)
-                masks.append(sample_mask)
+            mask_np = (
+                np.ones(seq_np.shape[:2], dtype=bool)
+                if token_mask is None
+                else token_mask.cpu().numpy().astype(bool)
+            )
+            embeddings.extend(seq_np)
+            masks.extend(mask_np)
             labels.append(data[1].cpu().numpy().astype(np.int64))
-            coverage.extend(_batch_coverage_rows(data[3]))
+            coverage.extend(batch_coverage_rows(data[3]))
+
             if batch_idx % 10 == 0 or batch_idx == len(loader):
                 print(f"{out_path.name}: batch {batch_idx}/{len(loader)}", flush=True)
 
-    x, mask = _pad_sequences(embeddings, masks)
+    x, mask = pad_sequences(embeddings, masks)
     y = np.concatenate(labels, axis=0)
     np.savez_compressed(
         out_path,
@@ -230,42 +311,58 @@ def cache_split(
         y=y,
         mask=mask,
         coverage=np.asarray([json.dumps(row) for row in coverage]),
-        config=json.dumps(config),
+        config=json.dumps(config, sort_keys=True),
         temporal_length=np.asarray([x.shape[1]], dtype=np.int64),
         input_dim=np.asarray([x.shape[2]], dtype=np.int64),
     )
-    print(f"wrote {out_path} x={x.shape} y={y.shape} valid_tokens={mask.sum(axis=1).tolist()[:5]}...")
+    print(f"wrote {out_path} x={x.shape} y={y.shape}")
 
 
-def spatial_pool(tokens: torch.Tensor, spatial_tokens: int, pool: str, topk: int = 16) -> torch.Tensor:
+def spatial_pool(tokens: torch.Tensor, spatial_tokens: int, pool: str, topk: int) -> torch.Tensor:
     batch_size, num_tokens, embed_dim = tokens.shape
     if num_tokens % spatial_tokens != 0:
         raise ValueError(f"num_tokens={num_tokens} is not divisible by spatial_tokens={spatial_tokens}")
     temporal_tokens = num_tokens // spatial_tokens
     x = tokens.reshape(batch_size, temporal_tokens, spatial_tokens, embed_dim)
-    mean = x.mean(dim=2)
+
     if pool == "mean":
-        return mean
+        return x.mean(dim=2)
     if pool == "mean_std":
-        std = x.std(dim=2, unbiased=False)
-        return torch.cat([mean, std], dim=-1)
+        return torch.cat([x.mean(dim=2), x.std(dim=2, unbiased=False)], dim=-1)
     if pool == "max":
         return x.max(dim=2).values
     if pool == "mean_max":
-        mx = x.max(dim=2).values
-        return torch.cat([mean, mx], dim=-1)
+        return torch.cat([x.mean(dim=2), x.max(dim=2).values], dim=-1)
     if pool == "topk_mean":
-        # Pool the K spatial tokens with the largest L2 norm — implicit "where is signal" attention
-        norms = x.norm(dim=-1)  # [B, T, S]
         k = min(int(topk), spatial_tokens)
-        _, idx = norms.topk(k=k, dim=2)  # [B, T, K]
-        idx_exp = idx.unsqueeze(-1).expand(-1, -1, -1, embed_dim)
-        top = torch.gather(x, dim=2, index=idx_exp)  # [B, T, K, D]
-        return top.mean(dim=2)
-    raise ValueError(f"unknown pool: {pool}")
+        norms = x.norm(dim=-1)
+        _, idx = norms.topk(k=k, dim=2)
+        idx = idx.unsqueeze(-1).expand(-1, -1, -1, embed_dim)
+        return torch.gather(x, dim=2, index=idx).mean(dim=2)
+    raise ValueError(f"Unknown spatial pool: {pool}")
 
 
-def _batch_coverage_rows(batch_coverage: Any) -> list[dict[str, float]]:
+def token_mask_from_batch(
+    data: Any,
+    tokens: torch.Tensor,
+    spatial_tokens: int,
+    frames_per_clip: int,
+    tubelet_size: int,
+) -> torch.Tensor | None:
+    if len(data) < 5:
+        return None
+    maybe_mask = data[-1]
+    if not (torch.is_tensor(maybe_mask) and maybe_mask.dtype == torch.bool and maybe_mask.ndim == 2):
+        return None
+    temporal_tokens_per_clip = frames_per_clip // tubelet_size
+    token_mask = maybe_mask.repeat_interleave(temporal_tokens_per_clip, dim=1)
+    expected_t = tokens.shape[1] // spatial_tokens
+    if token_mask.shape[1] != expected_t:
+        raise ValueError(f"token_mask length {token_mask.shape[1]} != expected {expected_t}")
+    return token_mask.to(device=tokens.device)
+
+
+def batch_coverage_rows(batch_coverage: Any) -> list[dict[str, float]]:
     if not isinstance(batch_coverage, dict):
         return []
     batch_size = len(next(iter(batch_coverage.values()))) if batch_coverage else 0
@@ -281,28 +378,7 @@ def _batch_coverage_rows(batch_coverage: Any) -> list[dict[str, float]]:
     return rows
 
 
-def _token_mask_from_batch(
-    data: Any,
-    seq: torch.Tensor,
-    frames_per_clip: int,
-    tubelet_size: int,
-) -> torch.Tensor | None:
-    if len(data) < 5:
-        return None
-    maybe_mask = data[-1]
-    if not (torch.is_tensor(maybe_mask) and maybe_mask.dtype == torch.bool and maybe_mask.ndim == 2):
-        return None
-    temporal_tokens_per_clip = frames_per_clip // tubelet_size
-    token_mask = maybe_mask.repeat_interleave(temporal_tokens_per_clip, dim=1)
-    if token_mask.shape != seq.shape[:2]:
-        raise ValueError(f"token_mask shape {tuple(token_mask.shape)} does not match seq shape {tuple(seq.shape[:2])}")
-    return token_mask.to(device=seq.device)
-
-
-def _pad_sequences(
-    sequences: list[np.ndarray],
-    masks: list[np.ndarray],
-) -> tuple[np.ndarray, np.ndarray]:
+def pad_sequences(sequences: list[np.ndarray], masks: list[np.ndarray]) -> tuple[np.ndarray, np.ndarray]:
     if not sequences:
         raise ValueError("No embeddings were produced")
     max_t = max(seq.shape[0] for seq in sequences)
